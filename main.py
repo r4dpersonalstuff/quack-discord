@@ -1,17 +1,31 @@
+import os
 import discord
 from discord.ext import commands
 
+# 1. Mengaktifkan izin intents membaca pesan
 intents = discord.Intents.default()
 intents.message_content = True
 
+# 2. Inisialisasi bot dengan prefix '!'
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 3. Event saat bot online
 @bot.event
 async def on_ready():
-    print(f"Bot berhasil online sebagai: {bot.user}")
+    print(f"=================================")
+    print(f"Bot berhasil online di Railway sebagai: {bot.user}")
+    print(f"=================================")
 
+# 4. Perintah tes !ping
 @bot.command()
 async def ping(ctx):
-    await ctx.send("Pong! Bot aktif 24/7!")
+    await ctx.send("Pong! Bot aktif 24/7 di Railway 🚀")
 
-bot.run("MTU2Nzc4MTE4OTUyMjAzODg3NA.GdBDWO.1yjjG-qTLctBUFq8b8nDhz7k2C5c6scnlzuCQM")
+# 5. Mengambil Token secara aman dari Environment Variable Railway
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+if not TOKEN:
+    print("ERROR: DISCORD_TOKEN tidak ditemukan! Harap atur Variable di dashboard Railway.")
+else:
+    bot.run(TOKEN)
+    
