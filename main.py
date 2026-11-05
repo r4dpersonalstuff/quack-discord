@@ -19,7 +19,7 @@ async def on_ready():
 # 4. Perintah tes !ping
 @bot.command()
 async def ping(ctx):
-    await ctx.send("Pong! Bot aktif 24/7 di Railway 🚀")
+    await ctx.send("Pong! I'm Here!")
 
 # 5. Mengambil Token secara aman dari Environment Variable Railway
 TOKEN = os.getenv("DISCORD_TOKEN")
