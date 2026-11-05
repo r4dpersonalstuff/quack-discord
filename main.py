@@ -24,5 +24,5 @@ async def hi(ctx):
     await ctx.send(f"Halo {ctx.author.name}! Bot ini berjalan dari server cloud tanpa HP menyala.")
 
 # Membaca token bot dari Environment Variable Koyeb
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("MTU2Nzc4MTE4OTUyMjAzODg3NA.GlCb9k.UPJzXi4vuyEczYiYeJFPgSKCwOwqZO80WEZW20")
 bot.run(TOKEN)
