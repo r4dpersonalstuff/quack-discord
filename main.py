@@ -95,7 +95,7 @@ async def add_auto_msg(
     conn.close()
 
     await interaction.response.send_message(
-        f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} minute(s)!\n**Message:** {message}",
+        f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} minute(s)!\n\n**Message:** {message}",
         ephemeral=False
     )
 
@@ -142,21 +142,10 @@ async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
     else:
         await interaction.response.send_message(f"❌ Auto-message ID #{msg_id} not found.", ephemeral=False)
 
-# BOT EVENTS
-@bot.event
-async def on_ready():
-    print(f"Bot successfully online as: {bot.user}")
-    
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s).")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
-        
-    if not check_scheduled_messages.is_running():
-        check_scheduled_messages.start()
+# ==========================================
+# FEATURE: ROLE PICKER (BUTTONS)
+# ==========================================
 
-# ROLE PICKER (BUTTONS)
 class RoleButton(discord.ui.Button):
     def __init__(self, role: discord.Role):
         # Create a button labeled with the role's name
@@ -225,7 +214,21 @@ async def rolepicker_command(
     await interaction.channel.send(embed=embed, view=view)
     
     # Hidden confirmation message for the admin
-    await interaction.response.send_message("✅ Role picker created successfully!", ephemeral=True)
+    await interaction.response.send_message("✅ Role picker created successfully!", ephemeral=False)
+
+# BOT EVENTS
+@bot.event
+async def on_ready():
+    print(f"Bot successfully online as: {bot.user}")
+    
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s).")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+        
+    if not check_scheduled_messages.is_running():
+        check_scheduled_messages.start()
 
 # RUN BOT
 TOKEN = os.getenv("DISCORD_TOKEN")
