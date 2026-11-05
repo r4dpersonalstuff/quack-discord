@@ -96,7 +96,7 @@ async def add_auto_msg(
 
     await interaction.response.send_message(
         f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} minute(s)!\n**Message:** {message}",
-        ephemeral=True
+        ephemeral=False
     )
 
 # Command 2: List all active automated messages
@@ -124,7 +124,7 @@ async def list_auto_msgs(interaction: discord.Interaction):
             inline=False
         )
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 # Command 3: Delete an automated message schedule by ID
 @bot.tree.command(name="delete_auto_msg", description="Delete an automated message schedule by ID")
@@ -138,9 +138,9 @@ async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
     conn.close()
 
     if deleted_count > 0:
-        await interaction.response.send_message(f"🗑️ Successfully deleted auto-message ID #{msg_id}.", ephemeral=True)
+        await interaction.response.send_message(f"🗑️ Successfully deleted auto-message ID #{msg_id}.", ephemeral=False)
     else:
-        await interaction.response.send_message(f"❌ Auto-message ID #{msg_id} not found.", ephemeral=True)
+        await interaction.response.send_message(f"❌ Auto-message ID #{msg_id} not found.", ephemeral=False)
 
 # BOT EVENTS
 @bot.event
