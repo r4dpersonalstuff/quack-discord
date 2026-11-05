@@ -11,7 +11,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 2. Database Initialization (SQLite)
-DB_NAME = "auto_messages.db"
+DB_NAME = "/data/auto_messages.db"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -215,6 +215,37 @@ async def rolepicker_command(
     
     # Hidden confirmation message for the admin
     await interaction.response.send_message("✅ Role picker created successfully!", ephemeral=False)
+
+# ==========================================
+# FEATURE: DEVLOG ANNOUNCEMENT (EMBED)
+# ==========================================
+@bot.tree.command(name="devlog", description="Send a formatted update / devlog announcement")
+@discord.app_commands.describe(
+    version="Version number (e.g., v1.0.0 or Patch 1.2)",
+    title="Title of the update",
+    changes="Summary of changes, new features, or bug fixes",
+    channel="Target text channel for the announcement"
+)
+async def devlog_command(
+    interaction: discord.Interaction,
+    version: str,
+    title: str,
+    changes: str,
+    channel: discord.TextChannel
+):
+    embed = discord.Embed(
+        title=f"🚀 Devlog [{version}]: {title}",
+        description=changes,
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text=f"Posted by {interaction.user.display_name}")
+    
+    # Send formatted embed to target channel
+    await channel.send(embed=embed)
+    
+    # Hidden confirmation message
+    await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
 
 # BOT EVENTS
 @bot.event
