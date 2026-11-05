@@ -156,6 +156,77 @@ async def on_ready():
     if not check_scheduled_messages.is_running():
         check_scheduled_messages.start()
 
+# ROLE PICKER (BUTTONS)
+class RoleButton(discord.ui.Button):
+    def __init__(self, role: discord.Role):
+        # Create a button labeled with the role's name
+        super().__init__(
+            label=role.name, 
+            style=discord.ButtonStyle.primary, 
+            custom_id=f"role_picker_{role.id}"
+        )
+        self.role_id = role.id
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        role = guild.get_role(self.role_id)
+        
+        if not role:
+            await interaction.response.send_message("❌ Role not found on this server.", ephemeral=True)
+            return
+
+        member = interaction.user
+        
+        # Toggle role: Add if missing, Remove if already owned
+        if role in member.roles:
+            await member.remove_roles(role)
+            await interaction.response.send_message(f"➖ Removed role **{role.name}**!", ephemeral=True)
+        else:
+            await member.add_roles(role)
+            await interaction.response.send_message(f"➕ Added role **{role.name}**!", ephemeral=True)
+
+
+class RolePickerView(discord.ui.View):
+    def __init__(self, roles: list[discord.Role]):
+        super().__init__(timeout=None)
+        # Dynamically add a button for each role provided
+        for role in roles:
+            self.add_item(RoleButton(role))
+
+
+@bot.tree.command(name="rolepicker", description="Create an interactive role picker message with buttons")
+@discord.app_commands.describe(
+    title="Title for the role picker embed",
+    role1="First role option",
+    role2="Second role option (optional)",
+    role3="Third role option (optional)",
+    role4="Fourth role option (optional)"
+)
+async def rolepicker_command(
+    interaction: discord.Interaction,
+    title: str,
+    role1: discord.Role,
+    role2: discord.Role = None,
+    role3: discord.Role = None,
+    role4: discord.Role = None
+):
+    # Filter out empty role slots
+    selected_roles = [r for r in [role1, role2, role3, role4] if r is not None]
+    
+    embed = discord.Embed(
+        title=f"🎭 {title}",
+        description="Click the buttons below to pick or remove your roles!",
+        color=discord.Color.green()
+    )
+    
+    view = RolePickerView(selected_roles)
+    
+    # Send embed & buttons to the current channel
+    await interaction.channel.send(embed=embed, view=view)
+    
+    # Hidden confirmation message for the admin
+    await interaction.response.send_message("✅ Role picker created successfully!", ephemeral=True)
+
 # RUN BOT
 TOKEN = os.getenv("DISCORD_TOKEN")
 
