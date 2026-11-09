@@ -14,10 +14,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 DB_NAME = "/data/auto_messages.db"
 
-# Channel IDs for GD Marketplace (Ganti angka ini sesuai ID Channel servermu!)
-POST_REVIEW_CHANNEL_ID = 1569201817131286548
-LFD_CHANNEL_ID = 1569196190925463634
-FHD_CHANNEL_ID = 1569195925585264740
+# Channel IDs for GD Marketplace (Replace with your server's actual Channel IDs!)
+POST_REVIEW_CHANNEL_ID = 123456789012345678
+LFD_CHANNEL_ID = 123456789012345678
+FHD_CHANNEL_ID = 123456789012345678
 
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
@@ -42,7 +42,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. BACKGROUND TASKS
+# 2. BACKGROUND TASKS & DM ABORT LISTENER
 # ==========================================
 @tasks.loop(minutes=1)
 async def check_scheduled_messages():
@@ -63,6 +63,19 @@ async def check_scheduled_messages():
 async def before_check_messages():
     await bot.wait_until_ready()
 
+@bot.event
+async def on_message(message: discord.Message):
+    if message.guild is None and not message.author.bot:
+        if message.content.strip().lower() == "abort":
+            embed = discord.Embed(
+                title="❌ Listing Cancelled",
+                description="The marketplace listing process has been cancelled.",
+                color=discord.Color.red()
+            )
+            await message.channel.send(embed=embed)
+            return
+    await bot.process_commands(message)
+
 # ==========================================
 # 3. AUTOMATED MESSAGES MANAGEMENT
 # ==========================================
@@ -76,7 +89,8 @@ async def add_auto_msg(interaction: discord.Interaction, channel: discord.TextCh
         conn.cursor().execute("INSERT INTO auto_messages (channel_id, delay_minutes, message, next_run) VALUES (?, ?, ?, ?)",
                               (channel.id, delay_minutes, message, next_run))
         conn.commit()
-    await interaction.response.send_message(f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} min!\n**Message:** {message}", ephemeral=True)
+    await interaction.response.send_message(f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} min!
+**Message:** {message}", ephemeral=True)
 
 @bot.tree.command(name="list_auto_msgs", description="View active recurring automated messages")
 async def list_auto_msgs(interaction: discord.Interaction):
@@ -86,7 +100,8 @@ async def list_auto_msgs(interaction: discord.Interaction):
         return await interaction.response.send_message("ℹ️ No active auto-messages found.", ephemeral=True)
     embed = discord.Embed(title="📋 Active Automated Messages", color=discord.Color.blue())
     for r_id, ch_id, delay, msg in records:
-        embed.add_field(name=f"ID #{r_id} | Channel: <#{ch_id}>", value=f"**Interval:** Every {delay} min\n**Message:** {msg}", inline=False)
+        embed.add_field(name=f"ID #{r_id} | Channel: <#{ch_id}>", value=f"**Interval:** Every {delay} min
+**Message:** {msg}", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="delete_auto_msg", description="Delete an automated message schedule by ID")
@@ -113,6 +128,19 @@ async def devlog_command(interaction: discord.Interaction, version: str, title: 
     embed.set_footer(text=f"Posted by {interaction.user.display_name}")
     await channel.send(embed=embed)
     await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
+
+class FeedbackModal(discord.ui.Modal, title="Submit Feedback / Bug Report"):
+    subject = discord.ui.TextInput(label="Subject", required=True, max_length=100)
+    details = discord.ui.TextInput(label="Details", style=discord.TextStyle.paragraph, required=True, max_length=1000)
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.send_message("✅ Thank you! Feedback submitted.", ephemeral=True)
+        embed = discord.Embed(title=f"📥 New Feedback: {self.subject.value}", description=self.details.value, color=discord.Color.teal(), timestamp=discord.utils.utcnow())
+        embed.set_footer(text=f"Submitted by {interaction.user.display_name} ({interaction.user.id})")
+        await interaction.channel.send(embed=embed)
+
+@bot.tree.command(name="feedback", description="Open a pop-up form to submit feedback or report a bug")
+async def feedback_command(interaction: discord.Interaction):
+    await interaction.response.send_modal(FeedbackModal())
 
 @bot.tree.command(name="roll", description="Roll a random number or dice")
 async def roll_command(interaction: discord.Interaction, max_value: int = 100):
@@ -141,16 +169,21 @@ async def rate_command(interaction: discord.Interaction, thing: str):
 class RoleSelectMenu(discord.ui.Select):
     def __init__(self, roles: list[discord.Role]):
         options = [discord.SelectOption(label=r.name, value=str(r.id), description=f"Toggle {r.name}") for r in roles]
-        super().__init__(placeholder="Click menu ini untuk memilih roles!", min_values=0, max_values=len(options), options=options, custom_id="dropdown_role_picker")
+        super().__init__(placeholder="Click here to select your roles!", min_values=0, max_values=len(options), options=options, custom_id="dropdown_role_picker")
 
     async def callback(self, interaction: discord.Interaction):
         selected = set(map(int, self.values))
         all_opts = {int(opt.value) for opt in self.options}
         to_add = [r for r_id in selected if (r := interaction.guild.get_role(r_id)) and r not in interaction.user.roles]
         to_rem = [r for r_id in (all_opts - selected) if (r := interaction.guild.get_role(r_id)) and r in interaction.user.roles]
-        if to_add: await interaction.user.add_roles(*to_add)
-        if to_rem: await interaction.user.remove_roles(*to_rem)
-        await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=True)
+        try:
+            if to_add: await interaction.user.add_roles(*to_add)
+            if to_rem: await interaction.user.remove_roles(*to_rem)
+            await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Failed to update roles! Make sure the Bot's role is above the target roles in Server Settings and has 'Manage Roles' permission.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ An error occurred: {e}", ephemeral=True)
 
 class RolePickerDropdownView(discord.ui.View):
     def __init__(self, roles: list[discord.Role]):
@@ -180,7 +213,8 @@ class DenyReasonModal(discord.ui.Modal, title="Deny Post Request"):
             conn.commit()
         embed = self.review_msg.embeds[0]
         embed.color = discord.Color.red()
-        embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**\n**Reason:** {self.reason.value}", inline=False)
+        embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**
+**Reason:** {self.reason.value}", inline=False)
         await self.review_msg.edit(embed=embed, view=None)
         await interaction.response.send_message(f"❌ Post #{self.post_id} denied.", ephemeral=True)
 
@@ -242,13 +276,25 @@ async def postsreview_command(interaction: discord.Interaction, post_id: int):
     await interaction.response.send_message(embed=embed, view=PostReviewView(post_id))
 
 # ==========================================
-# 7. ADVANCED MARKETPLACE DM FLOW
+# 7. ADVANCED MARKETPLACE DM FLOW (ENGLISH)
 # ==========================================
+class CancelButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
+
+    async def callback(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="❌ Listing Cancelled",
+            description="The marketplace listing creation process has been cancelled.",
+            color=discord.Color.red()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
 class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
-    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="Contoh: 3D Modeler for Hire", required=True, max_length=100)
-    desc_input = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, placeholder="Detail skill/jasa atau project...", required=True, max_length=1000)
-    rates_input = discord.ui.TextInput(label="Rates / Budget", placeholder="Contoh: Rp 500.000 / project", required=True, max_length=100)
-    portfolio_input = discord.ui.TextInput(label="Portfolio / Contact Info", placeholder="ArtStation, GitHub, Drive, dll", required=False, max_length=200)
+    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Godot Developer", required=True, max_length=100)
+    desc_input = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, placeholder="Describe your services, project scope, requirements...", required=True, max_length=1000)
+    rates_input = discord.ui.TextInput(label="Rates / Budget", placeholder="e.g., $500/project, $30/hr, or Negotiable", required=True, max_length=100)
+    portfolio_input = discord.ui.TextInput(label="Portfolio / Contact Info", placeholder="ArtStation, GitHub, Drive link, preferred contact", required=False, max_length=200)
 
     def __init__(self, listing_type: str, selected_skills: list[str]):
         super().__init__()
@@ -263,7 +309,13 @@ class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
             post_id = cursor.lastrowid
             conn.commit()
 
-        await interaction.response.send_message(f"✅ **Listing Submitted!** (ID: `#{post_id}`)\nPostingan kamu telah dikirim ke moderator.", ephemeral=True)
+        embed_done = discord.Embed(
+            title="✅ Listing Submitted!",
+            description=f"Your listing **'{self.title_input.value}'** (ID: `#{post_id}`) has been sent for moderator review.",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=embed_done, view=None)
+
         review_ch = interaction.client.get_channel(POST_REVIEW_CHANNEL_ID)
         if review_ch:
             embed = discord.Embed(title=f"🔍 Market Review #{post_id}: {self.title_input.value}", description=self.desc_input.value, color=discord.Color.gold(), timestamp=discord.utils.utcnow())
@@ -294,18 +346,27 @@ class MarketSkillSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         selected = self.values
-        embed = discord.Embed(title="📝 Almost Done!", description=f"Skill Terpilih: **{', '.join(selected)}**\nKlik tombol di bawah untuk mengisi detail.", color=discord.Color.blue())
-        await interaction.response.send_message(embed=embed, view=MarketFillDetailsView(self.listing_type, selected), ephemeral=True)
+        embed = discord.Embed(
+            title="📝 Almost Done!", 
+            description=f"Selected Skills: **{', '.join(selected)}**
+Click the button below to complete your listing details.", 
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="Step 3 of 3 • Send 'abort' or click Cancel to exit")
+        await interaction.response.edit_message(embed=embed, view=MarketFillDetailsView(self.listing_type, selected))
 
 class MarketSkillView(discord.ui.View):
     def __init__(self, listing_type: str):
         super().__init__(timeout=None)
         self.add_item(MarketSkillSelect(listing_type))
+        self.add_item(CancelButton())
 
 class MarketFillDetailsView(discord.ui.View):
     def __init__(self, listing_type: str, selected_skills: list[str]):
         super().__init__(timeout=None)
         self.listing_type, self.selected_skills = listing_type, selected_skills
+        self.add_item(CancelButton())
+
     @discord.ui.button(label="Fill Details Form", style=discord.ButtonStyle.primary, emoji="✍️")
     async def fill_details(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(MarketDetailsModal(self.listing_type, self.selected_skills))
@@ -313,22 +374,28 @@ class MarketFillDetailsView(discord.ui.View):
 class MarketTypeSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Sell Services", description="Menjual skill / menawarkan jasa ke client", emoji="💼"),
-            discord.SelectOption(label="Buy or Hire", description="Mencari jasa / merekrut developer", emoji="🛒")
+            discord.SelectOption(label="Sell Services", description="Offer your skills to potential clients", emoji="💼"),
+            discord.SelectOption(label="Buy or Hire", description="Hire designers or developers for your project", emoji="🛒")
         ]
         super().__init__(placeholder="Select listing type", min_values=1, max_values=1, options=options)
+
     async def callback(self, interaction: discord.Interaction):
-        embed = discord.Embed(title="🛠️ SKILLS", description="Pilih hingga 3 profesi/skill yang menggambarkan postingan kamu.", color=discord.Color.blue())
-        embed.set_footer(text="Step 2 of 3")
-        await interaction.response.send_message(embed=embed, view=MarketSkillView(self.values[0]), ephemeral=True)
+        embed = discord.Embed(
+            title="🛠️ SKILLS", 
+            description="Select up to 3 skills/professions that best describe your service or request.", 
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="Step 2 of 3 • Send 'abort' or click Cancel to exit")
+        await interaction.response.edit_message(embed=embed, view=MarketSkillView(self.values[0]))
 
 class MarketTypeView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(MarketTypeSelect())
+        self.add_item(CancelButton())
 
 class MarketDenyModal(discord.ui.Modal, title="Deny Marketplace Post"):
-    reason = discord.ui.TextInput(label="Reason for Denial", style=discord.TextStyle.paragraph, required=True, max_length=500)
+    reason = discord.ui.TextInput(label="Reason for Denial", style=discord.TextStyle.paragraph, placeholder="Provide a reason why this post is denied...", required=True, max_length=500)
     def __init__(self, post_id: int, review_msg: discord.Message):
         super().__init__()
         self.post_id, self.review_msg = post_id, review_msg
@@ -344,15 +411,16 @@ class MarketDenyModal(discord.ui.Modal, title="Deny Marketplace Post"):
                 author = interaction.client.get_user(author_id)
                 if author:
                     try:
-                        embed = discord.Embed(title="❌ Market Post Denied", description=f"Mohon maaf, postingan **'{title}'** (ID: `#{self.post_id}`) ditolak.", color=discord.Color.red(), timestamp=discord.utils.utcnow())
-                        embed.add_field(name="Alasan Penolakan", value=self.reason.value, inline=False)
+                        embed = discord.Embed(title="❌ Market Post Denied", description=f"Sorry, your post **'{title}'** (ID: `#{self.post_id}`) was denied by the moderators.", color=discord.Color.red(), timestamp=discord.utils.utcnow())
+                        embed.add_field(name="Reason for Denial", value=self.reason.value, inline=False)
                         await author.send(embed=embed)
                     except Exception: pass
         embed = self.review_msg.embeds[0]
         embed.color = discord.Color.red()
-        embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**\n**Reason:** {self.reason.value}", inline=False)
+        embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**
+**Reason:** {self.reason.value}", inline=False)
         await self.review_msg.edit(embed=embed, view=None)
-        await interaction.response.send_message(f"❌ Market post #{self.post_id} ditolak.", ephemeral=True)
+        await interaction.response.send_message(f"❌ Market post #{self.post_id} denied.", ephemeral=True)
 
 class MarketReviewView(discord.ui.View):
     def __init__(self, post_id: int):
@@ -365,7 +433,7 @@ class MarketReviewView(discord.ui.View):
             cursor = conn.cursor()
             row = cursor.execute("SELECT author_id, listing_type, skills, title, description, rates_or_budget, portfolio, status FROM market_posts WHERE id = ?", (self.post_id,)).fetchone()
             if not row or row[7] != 'PENDING':
-                return await interaction.response.send_message("❌ Postingan ini sudah ditinjau.", ephemeral=True)
+                return await interaction.response.send_message("❌ This post has already been reviewed.", ephemeral=True)
             author_id, listing_type, skills, title, desc, rates, portfolio, _ = row
             cursor.execute("UPDATE market_posts SET status = 'ACCEPTED' WHERE id = ?", (self.post_id,))
             conn.commit()
@@ -384,7 +452,7 @@ class MarketReviewView(discord.ui.View):
         author = interaction.client.get_user(author_id)
         if author:
             try:
-                dm_embed = discord.Embed(title="🎉 Market Post Approved!", description=f"Postingan kamu **'{title}'** telah disetujui dan diterbitkan di <#{target_id}>!", color=discord.Color.green())
+                dm_embed = discord.Embed(title="🎉 Market Post Approved!", description=f"Your post **'{title}'** has been approved and published in <#{target_id}>!", color=discord.Color.green())
                 await author.send(embed=dm_embed)
             except Exception: pass
 
@@ -398,30 +466,39 @@ class MarketReviewView(discord.ui.View):
         with sqlite3.connect(DB_NAME) as conn:
             row = conn.cursor().execute("SELECT status FROM market_posts WHERE id = ?", (self.post_id,)).fetchone()
         if not row or row[0] != 'PENDING':
-            return await interaction.response.send_message("❌ Postingan ini sudah ditinjau.", ephemeral=True)
+            return await interaction.response.send_message("❌ This post has already been reviewed.", ephemeral=True)
         await interaction.response.send_modal(MarketDenyModal(self.post_id, interaction.message))
 
 class OpenMarketRequestView(discord.ui.View):
     def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="Open Request", style=discord.ButtonStyle.primary, emoji="📝", custom_id="btn_open_market_request")
     async def open_request(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="📝 NEW LISTING", description="Hello! I'm here to help you with your journey into the GD Marketplace.\n\nFirst, what would you like to post?", color=discord.Color.blue())
-        embed.set_footer(text="Step 1 of 3 • Send 'abort' to cancel")
+        embed = discord.Embed(title="📝 NEW LISTING", description="Hello! I'm here to help you with your journey into the GD Marketplace.
+
+First, what would you like to post?", color=discord.Color.blue())
+        embed.set_footer(text="Step 1 of 3 • Send 'abort' or click Cancel to exit")
         try:
             await interaction.user.send(embed=embed, view=MarketTypeView())
-            await interaction.response.send_message("📩 DM terkirim untuk memulai pembuatan postingan marketplace!", ephemeral=True)
+            await interaction.response.send_message("📩 Sent you a Direct Message to get started with your marketplace listing!", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Gagal mengirim DM. Pastikan DM dari member server diizinkan ya!", ephemeral=True)
+            await interaction.response.send_message("❌ Failed to send DM. Please enable Direct Messages from server members in your Privacy Settings!", ephemeral=True)
 
 @bot.tree.command(name="setup_market", description="Setup the GD Marketplace panel embed in the current channel")
 async def setup_market_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 GD MARKETPLACE",
         description=(
-            "Welcome to the GD Marketplace! Here you can:\n\n"
-            "🛒 **Buy or Hire** — Find talented designers / developers for your project\n"
-            "💼 **Sell Services** — Offer your skills to potential clients\n\n"
-            "Click the button below to get started. The process takes place in your DMs for privacy.\n\n"
+            "Welcome to the GD Marketplace! Here you can:
+
+"
+            "🛒 **Buy or Hire** — Find talented designers / developers for your project
+"
+            "💼 **Sell Services** — Offer your skills to potential clients
+
+"
+            "Click the button below to get started. The process takes place in your DMs for privacy.
+
+"
             "⚠️ **All marketplace transactions must occur in designated server channels. DMing about jobs is prohibited.**"
         ),
         color=discord.Color.blue()
