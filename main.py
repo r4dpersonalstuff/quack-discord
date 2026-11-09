@@ -1,489 +1,465 @@
 import os
+import random
 import sqlite3
 from datetime import datetime, timedelta
 import discord
 from discord.ext import commands, tasks
 
-# 1. Initialize Intents & Bot
+# ==========================================
+# 1. BOT & DATABASE INITIALIZATION
+# ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 2. Database Initialization (SQLite)
 DB_NAME = "/data/auto_messages.db"
 
+# Channel IDs for GD Marketplace (Ganti angka ini sesuai ID Channel servermu!)
+POST_REVIEW_CHANNEL_ID = 123456789012345678
+LFD_CHANNEL_ID = 123456789012345678
+FHD_CHANNEL_ID = 123456789012345678
+
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS auto_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel_id INTEGER NOT NULL,
-            delay_minutes INTEGER NOT NULL,
-            message TEXT NOT NULL,
-            next_run TEXT NOT NULL
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS auto_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL,
+            delay_minutes INTEGER NOT NULL, message TEXT NOT NULL, next_run TEXT NOT NULL
+        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS pending_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL,
+            target_channel_id INTEGER NOT NULL, title TEXT NOT NULL,
+            description TEXT NOT NULL, image_url TEXT, status TEXT DEFAULT 'PENDING'
+        )''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS market_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL,
+            listing_type TEXT NOT NULL, skills TEXT NOT NULL, title TEXT NOT NULL,
+            description TEXT NOT NULL, rates_or_budget TEXT NOT NULL,
+            portfolio TEXT, status TEXT DEFAULT 'PENDING'
+        )''')
+        conn.commit()
 
 init_db()
 
 # ==========================================
-# BACKGROUND TASK (CHECKS DB EVERY MINUTE)
+# 2. BACKGROUND TASKS
 # ==========================================
 @tasks.loop(minutes=1)
 async def check_scheduled_messages():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    
     now_str = datetime.now().isoformat()
-    # Find all messages that are due to be sent
-    cursor.execute("SELECT id, channel_id, delay_minutes, message FROM auto_messages WHERE next_run <= ?", (now_str,))
-    records = cursor.fetchall()
-
-    for record_id, channel_id, delay_minutes, message in records:
-        channel = bot.get_channel(channel_id)
-        if channel:
-            try:
-                await channel.send(message)
-            except Exception as e:
-                print(f"Error sending message to channel {channel_id}: {e}")
-        
-        # Calculate and update the next run time
-        next_run_time = (datetime.now() + timedelta(minutes=delay_minutes)).isoformat()
-        cursor.execute("UPDATE auto_messages SET next_run = ? WHERE id = ?", (next_run_time, record_id))
-    
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        records = cursor.execute("SELECT id, channel_id, delay_minutes, message FROM auto_messages WHERE next_run <= ?", (now_str,)).fetchall()
+        for rec_id, ch_id, delay, msg in records:
+            ch = bot.get_channel(ch_id)
+            if ch:
+                try: await ch.send(msg)
+                except Exception as e: print(f"Error sending msg: {e}")
+            next_run = (datetime.now() + timedelta(minutes=delay)).isoformat()
+            cursor.execute("UPDATE auto_messages SET next_run = ? WHERE id = ?", (next_run, rec_id))
+        conn.commit()
 
 @check_scheduled_messages.before_loop
-async def before_check_scheduled_messages():
+async def before_check_messages():
     await bot.wait_until_ready()
 
 # ==========================================
-# SLASH COMMANDS FOR DISCORD MANAGEMENT
+# 3. AUTOMATED MESSAGES MANAGEMENT
 # ==========================================
-
-# Command 1: Add a new automated message schedule
 @bot.tree.command(name="add_auto_msg", description="Set up a recurring message for a specific channel")
-@discord.app_commands.describe(
-    channel="Select the target text channel",
-    delay_minutes="Interval delay in minutes (e.g., 60 for 1 hour, 120 for 2 hours)",
-    message="The message content to send automatically"
-)
-async def add_auto_msg(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel,
-    delay_minutes: int,
-    message: str
-):
+@discord.app_commands.describe(channel="Target channel", delay_minutes="Interval delay in minutes", message="Message content")
+async def add_auto_msg(interaction: discord.Interaction, channel: discord.TextChannel, delay_minutes: int, message: str):
     if delay_minutes < 1:
-        await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
-        return
-
+        return await interaction.response.send_message("❌ Delay must be at least 1 minute.", ephemeral=True)
     next_run = (datetime.now() + timedelta(minutes=delay_minutes)).isoformat()
-    
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO auto_messages (channel_id, delay_minutes, message, next_run) VALUES (?, ?, ?, ?)",
-        (channel.id, delay_minutes, message, next_run)
-    )
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.cursor().execute("INSERT INTO auto_messages (channel_id, delay_minutes, message, next_run) VALUES (?, ?, ?, ?)",
+                              (channel.id, delay_minutes, message, next_run))
+        conn.commit()
+    await interaction.response.send_message(f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} min!\n**Message:** {message}", ephemeral=True)
 
-    await interaction.response.send_message(
-        f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} minute(s)!\n\n**Message:** {message}",
-        ephemeral=False
-    )
-
-# Command 2: List all active automated messages
-@bot.tree.command(name="list_auto_msgs", description="View all active recurring automated messages")
+@bot.tree.command(name="list_auto_msgs", description="View active recurring automated messages")
 async def list_auto_msgs(interaction: discord.Interaction):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, channel_id, delay_minutes, message FROM auto_messages")
-    records = cursor.fetchall()
-    conn.close()
-
+    with sqlite3.connect(DB_NAME) as conn:
+        records = conn.cursor().execute("SELECT id, channel_id, delay_minutes, message FROM auto_messages").fetchall()
     if not records:
-        await interaction.response.send_message("ℹ️ No active auto-messages found.", ephemeral=True)
-        return
+        return await interaction.response.send_message("ℹ️ No active auto-messages found.", ephemeral=True)
+    embed = discord.Embed(title="📋 Active Automated Messages", color=discord.Color.blue())
+    for r_id, ch_id, delay, msg in records:
+        embed.add_field(name=f"ID #{r_id} | Channel: <#{ch_id}>", value=f"**Interval:** Every {delay} min\n**Message:** {msg}", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    embed = discord.Embed(
-        title="📋 Active Automated Messages",
-        color=discord.Color.blue()
-    )
-    
-    for record_id, channel_id, delay_minutes, message in records:
-        embed.add_field(
-            name=f"ID #{record_id} | Channel: <#{channel_id}>",
-            value=f"**Interval:** Every {delay_minutes} min\n**Message:** {message}",
-            inline=False
-        )
-
-    await interaction.response.send_message(embed=embed, ephemeral=False)
-
-# Command 3: Delete an automated message schedule by ID
 @bot.tree.command(name="delete_auto_msg", description="Delete an automated message schedule by ID")
-@discord.app_commands.describe(msg_id="The ID of the auto-message to delete (find ID via /list_auto_msgs)")
 async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM auto_messages WHERE id = ?", (msg_id,))
-    deleted_count = cursor.rowcount
-    conn.commit()
-    conn.close()
-
-    if deleted_count > 0:
-        await interaction.response.send_message(f"🗑️ Successfully deleted auto-message ID #{msg_id}.", ephemeral=False)
-    else:
-        await interaction.response.send_message(f"❌ Auto-message ID #{msg_id} not found.", ephemeral=False)
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM auto_messages WHERE id = ?", (msg_id,))
+        deleted = cursor.rowcount
+        conn.commit()
+    msg = f"🗑️ Deleted auto-message ID #{msg_id}." if deleted else f"❌ Auto-message ID #{msg_id} not found."
+    await interaction.response.send_message(msg, ephemeral=True)
 
 # ==========================================
-# FEATURE: ROLE PICKER (DROPDOWN MENU)
+# 4. UTILITY & FUN COMMANDS
 # ==========================================
+@bot.tree.command(name="say", description="Send a custom message to a specific channel")
+async def say_custom(interaction: discord.Interaction, message: str, channel: discord.TextChannel):
+    await channel.send(message)
+    await interaction.response.send_message(f"✅ Message sent to {channel.mention}!", ephemeral=True)
 
+@bot.tree.command(name="devlog", description="Send a formatted update / devlog announcement")
+async def devlog_command(interaction: discord.Interaction, version: str, title: str, changes: str, channel: discord.TextChannel):
+    embed = discord.Embed(title=f"🚀 Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+    embed.set_footer(text=f"Posted by {interaction.user.display_name}")
+    await channel.send(embed=embed)
+    await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
+
+class FeedbackModal(discord.ui.Modal, title="Submit Feedback / Bug Report"):
+    subject = discord.ui.TextInput(label="Subject", required=True, max_length=100)
+    details = discord.ui.TextInput(label="Details", style=discord.TextStyle.paragraph, required=True, max_length=1000)
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.send_message("✅ Thank you! Feedback submitted.", ephemeral=True)
+        embed = discord.Embed(title=f"📥 New Feedback: {self.subject.value}", description=self.details.value, color=discord.Color.teal(), timestamp=discord.utils.utcnow())
+        embed.set_footer(text=f"Submitted by {interaction.user.display_name} ({interaction.user.id})")
+        await interaction.channel.send(embed=embed)
+
+@bot.tree.command(name="feedback", description="Open a pop-up form to submit feedback or report a bug")
+async def feedback_command(interaction: discord.Interaction):
+    await interaction.response.send_modal(FeedbackModal())
+
+@bot.tree.command(name="roll", description="Roll a random number or dice")
+async def roll_command(interaction: discord.Interaction, max_value: int = 100):
+    if max_value < 1: return await interaction.response.send_message("❌ Max value must be >= 1.", ephemeral=True)
+    await interaction.response.send_message(f"🎲 **{interaction.user.display_name}** rolled **{random.randint(1, max_value)}** (1-{max_value})!")
+
+@bot.tree.command(name="8ball", description="Ask the Magic 8-Ball a question")
+async def eight_ball_command(interaction: discord.Interaction, question: str):
+    ans = random.choice(["It is certain.", "Without a doubt.", "Yes, definitely.", "Ask again later.", "Cannot predict now.", "Don't count on it.", "My reply is no.", "Very doubtful."])
+    embed = discord.Embed(title="🎱 Magic 8-Ball", color=discord.Color.purple())
+    embed.add_field(name="Question", value=question, inline=False)
+    embed.add_field(name="Answer", value=ans, inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="coinflip", description="Flip a virtual coin")
+async def coinflip_command(interaction: discord.Interaction):
+    await interaction.response.send_message(f"🪙 **{interaction.user.display_name}** flipped: **{random.choice(['Heads 🪙', 'Tails 🪙'])}**!")
+
+@bot.tree.command(name="rate", description="Rate anything on a scale of 0% to 100%")
+async def rate_command(interaction: discord.Interaction, thing: str):
+    await interaction.response.send_message(f"⭐ I rate **{thing}** a **{random.randint(0, 100)}%**!")
+
+# ==========================================
+# 5. ROLE PICKER (DROPDOWN)
+# ==========================================
 class RoleSelectMenu(discord.ui.Select):
     def __init__(self, roles: list[discord.Role]):
-        # Create option items for each role passed to the command
-        options = [
-            discord.SelectOption(
-                label=role.name,
-                value=str(role.id),
-                description=f"Toggle the {role.name} role"
-            )
-            for role in roles
-        ]
-        
-        super().__init__(
-            placeholder="Click menu ini untuk memilih roles!",
-            min_values=0,
-            max_values=len(options),
-            options=options,
-            custom_id="dropdown_role_picker"
-        )
+        options = [discord.SelectOption(label=r.name, value=str(r.id), description=f"Toggle {r.name}") for r in roles]
+        super().__init__(placeholder="Click menu ini untuk memilih roles!", min_values=0, max_values=len(options), options=options, custom_id="dropdown_role_picker")
 
     async def callback(self, interaction: discord.Interaction):
-        selected_ids = set(map(int, self.values))
-        guild = interaction.guild
-        member = interaction.user
-
-        all_option_ids = {int(opt.value) for opt in self.options}
-
-        roles_to_add = []
-        roles_to_remove = []
-
-        # Compare current selection with member's current roles
-        for role_id in all_option_ids:
-            role = guild.get_role(role_id)
-            if role:
-                if role_id in selected_ids:
-                    if role not in member.roles:
-                        roles_to_add.append(role)
-                else:
-                    if role in member.roles:
-                        roles_to_remove.append(role)
-
-        # Apply role changes
-        if roles_to_add:
-            await member.add_roles(*roles_to_add)
-        if roles_to_remove:
-            await member.remove_roles(*roles_to_remove)
-
+        selected = set(map(int, self.values))
+        all_opts = {int(opt.value) for opt in self.options}
+        to_add = [r for r_id in selected if (r := interaction.guild.get_role(r_id)) and r not in interaction.user.roles]
+        to_rem = [r for r_id in (all_opts - selected) if (r := interaction.guild.get_role(r_id)) and r in interaction.user.roles]
+        if to_add: await interaction.user.add_roles(*to_add)
+        if to_rem: await interaction.user.remove_roles(*to_rem)
         await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=True)
-
 
 class RolePickerDropdownView(discord.ui.View):
     def __init__(self, roles: list[discord.Role]):
         super().__init__(timeout=None)
         self.add_item(RoleSelectMenu(roles))
 
-
-@bot.tree.command(name="rolepicker", description="Create a role picker embed with a multi-select dropdown menu")
-@discord.app_commands.describe(
-    title="Title for the embed",
-    description="Description text displayed in the embed",
-    role1="First role option",
-    role2="Second role option (optional)",
-    role3="Third role option (optional)",
-    role4="Fourth role option (optional)",
-    role5="Fifth role option (optional)",
-    role6="Sixth role option (optional)",
-    role7="Seventh role option (optional)",
-    image_url="Optional direct image URL for the banner at the bottom"
-)
-async def rolepicker_command(
-    interaction: discord.Interaction,
-    title: str,
-    description: str,
-    role1: discord.Role,
-    role2: discord.Role = None,
-    role3: discord.Role = None,
-    role4: discord.Role = None,
-    role5: discord.Role = None,
-    role6: discord.Role = None,
-    role7: discord.Role = None,
-    image_url: str = None
-):
-    # Filter out unused role slots
-    selected_roles = [r for r in [role1, role2, role3, role4, role5, role6, role7] if r is not None]
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=discord.Color.blue()
-    )
-
-    # Attach banner image if provided
-    if image_url:
-        embed.set_image(url=image_url)
-
-    view = RolePickerDropdownView(selected_roles)
-
-    await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✅ Dropdown role picker created successfully!", ephemeral=True)
-    
+@bot.tree.command(name="rolepicker", description="Create a role picker embed with dropdown menu")
+async def rolepicker_command(interaction: discord.Interaction, title: str, description: str, role1: discord.Role, role2: discord.Role = None, role3: discord.Role = None, role4: discord.Role = None, role5: discord.Role = None, role6: discord.Role = None, role7: discord.Role = None, image_url: str = None):
+    roles = [r for r in [role1, role2, role3, role4, role5, role6, role7] if r]
+    embed = discord.Embed(title=title, description=description, color=discord.Color.blue())
+    if image_url: embed.set_image(url=image_url)
+    await interaction.channel.send(embed=embed, view=RolePickerDropdownView(roles))
+    await interaction.response.send_message("✅ Role picker created!", ephemeral=True)
 
 # ==========================================
-# FEATURE: DEVLOG ANNOUNCEMENT (EMBED)
+# 6. GENERIC POST & REVIEW SYSTEM
 # ==========================================
-@bot.tree.command(name="devlog", description="Send a formatted update / devlog announcement")
-@discord.app_commands.describe(
-    version="Version number (e.g., v1.0.0 or Patch 1.2)",
-    title="Title of the update",
-    changes="Summary of changes, new features, or bug fixes",
-    channel="Target text channel for the announcement"
-)
-async def devlog_command(
-    interaction: discord.Interaction,
-    version: str,
-    title: str,
-    changes: str,
-    channel: discord.TextChannel
-):
-    embed = discord.Embed(
-        title=f"🚀 Devlog [{version}]: {title}",
-        description=changes,
-        color=discord.Color.blue(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.set_footer(text=f"Posted by {interaction.user.display_name}")
-    
-    # Send formatted embed to target channel
-    await channel.send(embed=embed)
-    
-    # Hidden confirmation message
-    await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
-
-# ==========================================
-# FEATURE: POST & POSTS REVIEW SYSTEM
-# ==========================================
-
-# 1. Initialize SQLite Table for Pending Posts
-def init_pending_posts_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS pending_posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            author_id INTEGER NOT NULL,
-            target_channel_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT NOT NULL,
-            image_url TEXT,
-            status TEXT DEFAULT 'PENDING'
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_pending_posts_db()
-
-# 2. Modal Form for Denial Reason
 class DenyReasonModal(discord.ui.Modal, title="Deny Post Request"):
-    reason = discord.ui.TextInput(
-        label="Reason for Denial",
-        style=discord.TextStyle.paragraph,
-        placeholder="Provide a reason why this post is denied...",
-        required=True,
-        max_length=500
-    )
-
-    def __init__(self, post_id: int, review_message: discord.Message):
+    reason = discord.ui.TextInput(label="Reason", style=discord.TextStyle.paragraph, required=True, max_length=500)
+    def __init__(self, post_id: int, review_msg: discord.Message):
         super().__init__()
-        self.post_id = post_id
-        self.review_message = review_message
+        self.post_id, self.review_msg = post_id, review_msg
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Update DB status
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE pending_posts SET status = 'DENIED' WHERE id = ?", (self.post_id,))
-        conn.commit()
-        conn.close()
-
-        # Update the review embed to reflect denial
-        embed = self.review_message.embeds[0]
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.cursor().execute("UPDATE pending_posts SET status = 'DENIED' WHERE id = ?", (self.post_id,))
+            conn.commit()
+        embed = self.review_msg.embeds[0]
         embed.color = discord.Color.red()
-        embed.add_field(
-            name="Status", 
-            value=f"❌ **Denied by {interaction.user.mention}**\n**Reason:** {self.reason.value}", 
-            inline=False
-        )
-        
-        await self.review_message.edit(embed=embed, view=None)
-        await interaction.response.send_message(f"❌ Post #{self.post_id} denied successfully.", ephemeral=True)
+        embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**\n**Reason:** {self.reason.value}", inline=False)
+        await self.review_msg.edit(embed=embed, view=None)
+        await interaction.response.send_message(f"❌ Post #{self.post_id} denied.", ephemeral=True)
 
-
-# 3. Interactive Review Buttons View (Accept / Deny)
 class PostReviewView(discord.ui.View):
     def __init__(self, post_id: int):
         super().__init__(timeout=None)
         self.post_id = post_id
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="btn_accept_post")
-    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("SELECT target_channel_id, title, description, image_url, status FROM pending_posts WHERE id = ?", (self.post_id,))
-        row = cursor.fetchone()
-
-        if not row or row[4] != 'PENDING':
-            conn.close()
-            await interaction.response.send_message("❌ This post is no longer pending.", ephemeral=True)
-            return
-
-        target_channel_id, title, description, image_url, _ = row
-        cursor.execute("UPDATE pending_posts SET status = 'ACCEPTED' WHERE id = ?", (self.post_id,))
-        conn.commit()
-        conn.close()
-
-        # Publish the accepted embed to the target channel
-        target_channel = interaction.guild.get_channel(target_channel_id)
-        if target_channel:
-            published_embed = discord.Embed(
-                title=title,
-                description=description,
-                color=discord.Color.blue(),
-                timestamp=discord.utils.utcnow()
-            )
-            if image_url:
-                published_embed.set_image(url=image_url)
-            await target_channel.send(embed=published_embed)
-
-        # Update review embed
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT target_channel_id, title, description, image_url, status FROM pending_posts WHERE id = ?", (self.post_id,)).fetchone()
+            if not row or row[4] != 'PENDING':
+                return await interaction.response.send_message("❌ Post not pending.", ephemeral=True)
+            target_id, title, desc, img, _ = row
+            cursor.execute("UPDATE pending_posts SET status = 'ACCEPTED' WHERE id = ?", (self.post_id,))
+            conn.commit()
+        ch = interaction.guild.get_channel(target_id)
+        if ch:
+            pub_embed = discord.Embed(title=title, description=desc, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+            if img: pub_embed.set_image(url=img)
+            await ch.send(embed=pub_embed)
         embed = interaction.message.embeds[0]
         embed.color = discord.Color.green()
-        embed.add_field(
-            name="Status", 
-            value=f"✅ **Accepted by {interaction.user.mention}** (Published in <#{target_channel_id}>)", 
-            inline=False
-        )
+        embed.add_field(name="Status", value=f"✅ **Accepted by {interaction.user.mention}** (<#{target_id}>)", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, custom_id="btn_deny_post")
-    async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("SELECT status FROM pending_posts WHERE id = ?", (self.post_id,))
-        row = cursor.fetchone()
-        conn.close()
-
+    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+        with sqlite3.connect(DB_NAME) as conn:
+            row = conn.cursor().execute("SELECT status FROM pending_posts WHERE id = ?", (self.post_id,)).fetchone()
         if not row or row[0] != 'PENDING':
-            await interaction.response.send_message("❌ This post is no longer pending.", ephemeral=True)
-            return
-
-        # Open pop-up modal to get denial reason
+            return await interaction.response.send_message("❌ Post not pending.", ephemeral=True)
         await interaction.response.send_modal(DenyReasonModal(self.post_id, interaction.message))
 
-
-# 4. Command /post (Submit Embed Draft)
 @bot.tree.command(name="post", description="Create an embedded post submission for admin review")
-@discord.app_commands.describe(
-    title="Title of the embedded post",
-    description="Content/body text of the embedded post",
-    target_channel="Channel where the post should be published if approved",
-    image_url="Optional banner/image URL for the embed"
-)
-async def post_command(
-    interaction: discord.Interaction,
-    title: str,
-    description: str,
-    target_channel: discord.TextChannel,
-    image_url: str = None
-):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO pending_posts (author_id, target_channel_id, title, description, image_url) VALUES (?, ?, ?, ?, ?)",
-        (interaction.user.id, target_channel.id, title, description, image_url)
-    )
-    post_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+async def post_command(interaction: discord.Interaction, title: str, description: str, target_channel: discord.TextChannel, image_url: str = None):
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO pending_posts (author_id, target_channel_id, title, description, image_url) VALUES (?, ?, ?, ?, ?)",
+                       (interaction.user.id, target_channel.id, title, description, image_url))
+        post_id = cursor.lastrowid
+        conn.commit()
+    await interaction.response.send_message(f"📝 Post submitted! ID: `#{post_id}`", ephemeral=True)
 
-    await interaction.response.send_message(
-        f"📝 Post submitted for review! **Post ID:** `#{post_id}`\nAdmins can review it using `/postsreview post_id:{post_id}`",
-        ephemeral=True
-    )
-
-
-# 5. Command /postsreview (Review & Approve/Deny)
-@bot.tree.command(name="postsreview", description="Review a submitted post embed with Accept/Deny buttons")
-@discord.app_commands.describe(post_id="ID of the submitted post to review")
+@bot.tree.command(name="postsreview", description="Review a submitted post embed")
 async def postsreview_command(interaction: discord.Interaction, post_id: int):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT author_id, target_channel_id, title, description, image_url, status FROM pending_posts WHERE id = ?", (post_id,))
-    row = cursor.fetchone()
-    conn.close()
+    with sqlite3.connect(DB_NAME) as conn:
+        row = conn.cursor().execute("SELECT author_id, target_channel_id, title, description, image_url, status FROM pending_posts WHERE id = ?", (post_id,)).fetchone()
+    if not row: return await interaction.response.send_message(f"❌ Post ID `#{post_id}` not found.", ephemeral=True)
+    author_id, target_id, title, desc, img, status = row
+    if status != 'PENDING': return await interaction.response.send_message(f"ℹ️ Post `#{post_id}` already {status}.", ephemeral=True)
 
-    if not row:
-        await interaction.response.send_message(f"❌ Post ID `#{post_id}` not found.", ephemeral=True)
-        return
-
-    author_id, target_channel_id, title, description, image_url, status = row
-
-    if status != 'PENDING':
-        await interaction.response.send_message(f"ℹ️ Post ID `#{post_id}` has already been **{status}**.", ephemeral=True)
-        return
-
-    embed = discord.Embed(
-        title=f"🔍 Reviewing Post #{post_id}: {title}",
-        description=description,
-        color=discord.Color.gold(),
-        timestamp=discord.utils.utcnow()
-    )
+    embed = discord.Embed(title=f"🔍 Review Post #{post_id}: {title}", description=desc, color=discord.Color.gold(), timestamp=discord.utils.utcnow())
     embed.add_field(name="Author", value=f"<@{author_id}>", inline=True)
-    embed.add_field(name="Target Channel", value=f"<#{target_channel_id}>", inline=True)
-    
-    if image_url:
-        embed.set_image(url=image_url)
+    embed.add_field(name="Target Channel", value=f"<#{target_id}>", inline=True)
+    if img: embed.set_image(url=img)
+    await interaction.response.send_message(embed=embed, view=PostReviewView(post_id))
 
-    view = PostReviewView(post_id)
-    await interaction.response.send_message(embed=embed, view=view)
-    
+# ==========================================
+# 7. ADVANCED MARKETPLACE DM FLOW
+# ==========================================
+class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
+    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="Contoh: 3D Modeler for Hire", required=True, max_length=100)
+    desc_input = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, placeholder="Detail skill/jasa atau project...", required=True, max_length=1000)
+    rates_input = discord.ui.TextInput(label="Rates / Budget", placeholder="Contoh: Rp 500.000 / project", required=True, max_length=100)
+    portfolio_input = discord.ui.TextInput(label="Portfolio / Contact Info", placeholder="ArtStation, GitHub, Drive, dll", required=False, max_length=200)
 
-# BOT EVENTS
+    def __init__(self, listing_type: str, selected_skills: list[str]):
+        super().__init__()
+        self.listing_type, self.selected_skills = listing_type, selected_skills
+
+    async def on_submit(self, interaction: discord.Interaction):
+        skills_str = ", ".join(self.selected_skills)
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO market_posts (author_id, listing_type, skills, title, description, rates_or_budget, portfolio) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                           (interaction.user.id, self.listing_type, skills_str, self.title_input.value, self.desc_input.value, self.rates_input.value, self.portfolio_input.value or "N/A"))
+            post_id = cursor.lastrowid
+            conn.commit()
+
+        await interaction.response.send_message(f"✅ **Listing Submitted!** (ID: `#{post_id}`)\nPostingan kamu telah dikirim ke moderator.", ephemeral=True)
+        review_ch = interaction.client.get_channel(POST_REVIEW_CHANNEL_ID)
+        if review_ch:
+            embed = discord.Embed(title=f"🔍 Market Review #{post_id}: {self.title_input.value}", description=self.desc_input.value, color=discord.Color.gold(), timestamp=discord.utils.utcnow())
+            embed.add_field(name="Author", value=f"<@{interaction.user.id}>", inline=True)
+            embed.add_field(name="Type", value=self.listing_type, inline=True)
+            embed.add_field(name="Skills / Role", value=skills_str, inline=False)
+            embed.add_field(name="Rates / Budget", value=self.rates_input.value, inline=True)
+            embed.add_field(name="Portfolio / Contact", value=self.portfolio_input.value or "N/A", inline=True)
+            target_mention = f"<#{LFD_CHANNEL_ID}>" if self.listing_type == "Sell Services" else f"<#{FHD_CHANNEL_ID}>"
+            embed.add_field(name="Target Channel", value=target_mention, inline=False)
+            await review_ch.send(embed=embed, view=MarketReviewView(post_id))
+
+class MarketSkillSelect(discord.ui.Select):
+    def __init__(self, listing_type: str):
+        self.listing_type = listing_type
+        profs = [
+            ("Animator", "2D/3D Animation, Rigging, Motion Graphics"),
+            ("Artist", "Concept Art, Pixel Art, Textures, 2D Sprites"),
+            ("Builder", "Level Design, World Building, Map Environment"),
+            ("Scripting", "Gameplay Programming, Systems, GDScript/Luau/C#"),
+            ("Sound Composer", "Music Production, SFX, Audio Design"),
+            ("UI/UX", "User Interface, Layout Design, HUD Systems"),
+            ("VFX", "Particle Systems, Shaders, Visual Effects"),
+            ("Modeler", "3D Asset Modeling, Texturing, Sculpting")
+        ]
+        options = [discord.SelectOption(label=name, description=desc, value=name) for name, desc in profs]
+        super().__init__(placeholder="Pick up to 3 skills", min_values=1, max_values=3, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values
+        embed = discord.Embed(title="📝 Almost Done!", description=f"Skill Terpilih: **{', '.join(selected)}**\nKlik tombol di bawah untuk mengisi detail.", color=discord.Color.blue())
+        await interaction.response.send_message(embed=embed, view=MarketFillDetailsView(self.listing_type, selected), ephemeral=True)
+
+class MarketSkillView(discord.ui.View):
+    def __init__(self, listing_type: str):
+        super().__init__(timeout=None)
+        self.add_item(MarketSkillSelect(listing_type))
+
+class MarketFillDetailsView(discord.ui.View):
+    def __init__(self, listing_type: str, selected_skills: list[str]):
+        super().__init__(timeout=None)
+        self.listing_type, self.selected_skills = listing_type, selected_skills
+    @discord.ui.button(label="Fill Details Form", style=discord.ButtonStyle.primary, emoji="✍️")
+    async def fill_details(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MarketDetailsModal(self.listing_type, self.selected_skills))
+
+class MarketTypeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Sell Services", description="Menjual skill / menawarkan jasa ke client", emoji="💼"),
+            discord.SelectOption(label="Buy or Hire", description="Mencari jasa / merekrut developer", emoji="🛒")
+        ]
+        super().__init__(placeholder="Select listing type", min_values=1, max_values=1, options=options)
+    async def callback(self, interaction: discord.Interaction):
+        embed = discord.Embed(title="🛠️ SKILLS", description="Pilih hingga 3 profesi/skill yang menggambarkan postingan kamu.", color=discord.Color.blue())
+        embed.set_footer(text="Step 2 of 3")
+        await interaction.response.send_message(embed=embed, view=MarketSkillView(self.values[0]), ephemeral=True)
+
+class MarketTypeView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(MarketTypeSelect())
+
+class MarketDenyModal(discord.ui.Modal, title="Deny Marketplace Post"):
+    reason = discord.ui.TextInput(label="Reason for Denial", style=discord.TextStyle.paragraph, required=True, max_length=500)
+    def __init__(self, post_id: int, review_msg: discord.Message):
+        super().__init__()
+        self.post_id, self.review_msg = post_id, review_msg
+
+    async def on_submit(self, interaction: discord.Interaction):
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT author_id, title FROM market_posts WHERE id = ?", (self.post_id,)).fetchone()
+            if row:
+                author_id, title = row
+                cursor.execute("UPDATE market_posts SET status = 'DENIED' WHERE id = ?", (self.post_id,))
+                conn.commit()
+                author = interaction.client.get_user(author_id)
+                if author:
+                    try:
+                        embed = discord.Embed(title="❌ Market Post Denied", description=f"Mohon maaf, postingan **'{title}'** (ID: `#{self.post_id}`) ditolak.", color=discord.Color.red(), timestamp=discord.utils.utcnow())
+                        embed.add_field(name="Alasan Penolakan", value=self.reason.value, inline=False)
+                        await author.send(embed=embed)
+                    except Exception: pass
+        embed = self.review_msg.embeds[0]
+        embed.color = discord.Color.red()
+        embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**\n**Reason:** {self.reason.value}", inline=False)
+        await self.review_msg.edit(embed=embed, view=None)
+        await interaction.response.send_message(f"❌ Market post #{self.post_id} ditolak.", ephemeral=True)
+
+class MarketReviewView(discord.ui.View):
+    def __init__(self, post_id: int):
+        super().__init__(timeout=None)
+        self.post_id = post_id
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="btn_accept_market")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT author_id, listing_type, skills, title, description, rates_or_budget, portfolio, status FROM market_posts WHERE id = ?", (self.post_id,)).fetchone()
+            if not row or row[7] != 'PENDING':
+                return await interaction.response.send_message("❌ Postingan ini sudah ditinjau.", ephemeral=True)
+            author_id, listing_type, skills, title, desc, rates, portfolio, _ = row
+            cursor.execute("UPDATE market_posts SET status = 'ACCEPTED' WHERE id = ?", (self.post_id,))
+            conn.commit()
+
+        target_id = LFD_CHANNEL_ID if listing_type == "Sell Services" else FHD_CHANNEL_ID
+        ch = interaction.guild.get_channel(target_id)
+        if ch:
+            p_embed = discord.Embed(title=f"📢 [{listing_type.upper()}] {title}", description=desc, color=discord.Color.green() if listing_type == "Sell Services" else discord.Color.blue(), timestamp=discord.utils.utcnow())
+            p_embed.add_field(name="Poster", value=f"<@{author_id}>", inline=True)
+            p_embed.add_field(name="Skills / Role", value=skills, inline=True)
+            p_embed.add_field(name="Rates / Budget", value=rates, inline=True)
+            if portfolio and portfolio != "N/A": p_embed.add_field(name="Portfolio / Contact", value=portfolio, inline=False)
+            p_embed.set_footer(text="GD Marketplace • Safe & Secure Transactions")
+            await ch.send(embed=p_embed)
+
+        author = interaction.client.get_user(author_id)
+        if author:
+            try:
+                dm_embed = discord.Embed(title="🎉 Market Post Approved!", description=f"Postingan kamu **'{title}'** telah disetujui dan diterbitkan di <#{target_id}>!", color=discord.Color.green())
+                await author.send(embed=dm_embed)
+            except Exception: pass
+
+        embed = interaction.message.embeds[0]
+        embed.color = discord.Color.green()
+        embed.add_field(name="Status", value=f"✅ **Accepted by {interaction.user.mention}** (<#{target_id}>)", inline=False)
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, emoji="❌", custom_id="btn_deny_market")
+    async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        with sqlite3.connect(DB_NAME) as conn:
+            row = conn.cursor().execute("SELECT status FROM market_posts WHERE id = ?", (self.post_id,)).fetchone()
+        if not row or row[0] != 'PENDING':
+            return await interaction.response.send_message("❌ Postingan ini sudah ditinjau.", ephemeral=True)
+        await interaction.response.send_modal(MarketDenyModal(self.post_id, interaction.message))
+
+class OpenMarketRequestView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None)
+    @discord.ui.button(label="Open Request", style=discord.ButtonStyle.primary, emoji="📝", custom_id="btn_open_market_request")
+    async def open_request(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(title="📝 NEW LISTING", description="Hello! I'm here to help you with your journey into the GD Marketplace.\n\nFirst, what would you like to post?", color=discord.Color.blue())
+        embed.set_footer(text="Step 1 of 3 • Send 'abort' to cancel")
+        try:
+            await interaction.user.send(embed=embed, view=MarketTypeView())
+            await interaction.response.send_message("📩 DM terkirim untuk memulai pembuatan postingan marketplace!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Gagal mengirim DM. Pastikan DM dari member server diizinkan ya!", ephemeral=True)
+
+@bot.tree.command(name="setup_market", description="Setup the GD Marketplace panel embed in the current channel")
+async def setup_market_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📋 GD MARKETPLACE",
+        description=(
+            "Welcome to the GD Marketplace! Here you can:\n\n"
+            "🛒 **Buy or Hire** — Find talented designers / developers for your project\n"
+            "💼 **Sell Services** — Offer your skills to potential clients\n\n"
+            "Click the button below to get started. The process takes place in your DMs for privacy.\n\n"
+            "⚠️ **All marketplace transactions must occur in designated server channels. DMing about jobs is prohibited.**"
+        ),
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="GD Marketplace • Safe & Secure Transactions")
+    await interaction.channel.send(embed=embed, view=OpenMarketRequestView())
+    await interaction.response.send_message("✅ Marketplace panel created!", ephemeral=True)
+
+# ==========================================
+# 8. BOT EVENTS & RUN
+# ==========================================
 @bot.event
 async def on_ready():
+    print("=================================")
     print(f"Bot successfully online as: {bot.user}")
-    
+    print("=================================")
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s).")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
-        
     if not check_scheduled_messages.is_running():
         check_scheduled_messages.start()
 
-# RUN BOT
 TOKEN = os.getenv("DISCORD_TOKEN")
-
 if not TOKEN:
     print("ERROR: DISCORD_TOKEN is missing!")
 else:
