@@ -15,9 +15,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DB_NAME = "/data/auto_messages.db"
 
 # Channel IDs for GD Marketplace (Ganti angka ini sesuai ID Channel servermu!)
-POST_REVIEW_CHANNEL_ID = 123456789012345678
-LFD_CHANNEL_ID = 123456789012345678
-FHD_CHANNEL_ID = 123456789012345678
+POST_REVIEW_CHANNEL_ID = 1569201817131286548
+LFD_CHANNEL_ID = 1569196190925463634
+FHD_CHANNEL_ID = 1569195925585264740
 
 def init_db():
     with sqlite3.connect(DB_NAME) as conn:
