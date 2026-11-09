@@ -129,19 +129,6 @@ async def devlog_command(interaction: discord.Interaction, version: str, title: 
     await channel.send(embed=embed)
     await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
 
-class FeedbackModal(discord.ui.Modal, title="Submit Feedback / Bug Report"):
-    subject = discord.ui.TextInput(label="Subject", required=True, max_length=100)
-    details = discord.ui.TextInput(label="Details", style=discord.TextStyle.paragraph, required=True, max_length=1000)
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message("✅ Thank you! Feedback submitted.", ephemeral=True)
-        embed = discord.Embed(title=f"📥 New Feedback: {self.subject.value}", description=self.details.value, color=discord.Color.teal(), timestamp=discord.utils.utcnow())
-        embed.set_footer(text=f"Submitted by {interaction.user.display_name} ({interaction.user.id})")
-        await interaction.channel.send(embed=embed)
-
-@bot.tree.command(name="feedback", description="Open a pop-up form to submit feedback or report a bug")
-async def feedback_command(interaction: discord.Interaction):
-    await interaction.response.send_modal(FeedbackModal())
-
 @bot.tree.command(name="roll", description="Roll a random number or dice")
 async def roll_command(interaction: discord.Interaction, max_value: int = 100):
     if max_value < 1: return await interaction.response.send_message("❌ Max value must be >= 1.", ephemeral=True)
@@ -291,7 +278,7 @@ class CancelButton(discord.ui.Button):
         await interaction.response.edit_message(embed=embed, view=None)
 
 class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
-    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Godot Developer", required=True, max_length=100)
+    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Developer", required=True, max_length=100)
     desc_input = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, placeholder="Describe your services, project scope, requirements...", required=True, max_length=1000)
     rates_input = discord.ui.TextInput(label="Rates / Budget", placeholder="e.g., $500/project, $30/hr, or Negotiable", required=True, max_length=100)
     portfolio_input = discord.ui.TextInput(label="Portfolio / Contact Info", placeholder="ArtStation, GitHub, Drive link, preferred contact", required=False, max_length=200)
@@ -441,7 +428,7 @@ class MarketReviewView(discord.ui.View):
         target_id = LFD_CHANNEL_ID if listing_type == "Sell Services" else FHD_CHANNEL_ID
         ch = interaction.guild.get_channel(target_id)
         if ch:
-            p_embed = discord.Embed(title=f"📢 [{listing_type.upper()}] {title}", description=desc, color=discord.Color.green() if listing_type == "Sell Services" else discord.Color.blue(), timestamp=discord.utils.utcnow())
+            p_embed = discord.Embed(title=f"📢 {title}", description=desc, color=discord.Color.green() if listing_type == "Sell Services" else discord.Color.blue(), timestamp=discord.utils.utcnow())
             p_embed.add_field(name="Poster", value=f"<@{author_id}>", inline=True)
             p_embed.add_field(name="Skills / Role", value=skills, inline=True)
             p_embed.add_field(name="Rates / Budget", value=rates, inline=True)
@@ -473,7 +460,7 @@ class OpenMarketRequestView(discord.ui.View):
     def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="Open Request", style=discord.ButtonStyle.primary, emoji="📝", custom_id="btn_open_market_request")
     async def open_request(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="📝 NEW LISTING", description="Hello! I'm here to help you with your journey into the GD Marketplace.
+        embed = discord.Embed(title="📝 NEW LISTING", description="Hello! I'm here to help you with your journey into the RAC Marketplace.
 
 First, what would you like to post?", color=discord.Color.blue())
         embed.set_footer(text="Step 1 of 3 • Send 'abort' or click Cancel to exit")
@@ -483,12 +470,12 @@ First, what would you like to post?", color=discord.Color.blue())
         except discord.Forbidden:
             await interaction.response.send_message("❌ Failed to send DM. Please enable Direct Messages from server members in your Privacy Settings!", ephemeral=True)
 
-@bot.tree.command(name="setup_market", description="Setup the GD Marketplace panel embed in the current channel")
+@bot.tree.command(name="setup_market", description="Setup the RAC Marketplace panel embed in the current channel")
 async def setup_market_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 GD MARKETPLACE",
         description=(
-            "Welcome to the GD Marketplace! Here you can:
+            "Welcome to the RAC Marketplace! Here you can:
 
 "
             "🛒 **Buy or Hire** — Find talented designers / developers for your project
@@ -503,7 +490,7 @@ async def setup_market_command(interaction: discord.Interaction):
         ),
         color=discord.Color.blue()
     )
-    embed.set_footer(text="GD Marketplace • Safe & Secure Transactions")
+    embed.set_footer(text="RAC Marketplace • Safe & Secure Transactions")
     await interaction.channel.send(embed=embed, view=OpenMarketRequestView())
     await interaction.response.send_message("✅ Marketplace panel created!", ephemeral=True)
 
