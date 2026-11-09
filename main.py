@@ -4,10 +4,27 @@ import sqlite3
 from datetime import datetime, timedelta
 import discord
 from discord.ext import commands, tasks
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
-# ==========================================
-# 1. BOT & DATABASE INITIALIZATION
-# ==========================================
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is online and healthy!")
+        
+    def log_message(self, format, *args):
+        return
+
+def run_web_server():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), KeepAliveHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_web_server, daemon=True).start()
+
+# BOT & DATABASE INITIALIZATION
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
