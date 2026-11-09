@@ -94,8 +94,9 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 # ==========================================
-# 3. AUTOMATED MESSAGES MANAGEMENT
+# 3. AUTOMATED MESSAGES MANAGEMENT (FIXED)
 # ==========================================
+
 @bot.tree.command(name="add_auto_msg", description="Set up a recurring message for a specific channel")
 @discord.app_commands.describe(channel="Target channel", delay_minutes="Interval delay in minutes", message="Message content")
 async def add_auto_msg(interaction: discord.Interaction, channel: discord.TextChannel, delay_minutes: int, message: str):
@@ -106,8 +107,7 @@ async def add_auto_msg(interaction: discord.Interaction, channel: discord.TextCh
         conn.cursor().execute("INSERT INTO auto_messages (channel_id, delay_minutes, message, next_run) VALUES (?, ?, ?, ?)",
                               (channel.id, delay_minutes, message, next_run))
         conn.commit()
-    await interaction.response.send_message(f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} min!
-**Message:** {message}", ephemeral=True)
+    await interaction.response.send_message(f"✅ Auto-message scheduled for {channel.mention} every {delay_minutes} min!\n**Message:** {message}", ephemeral=True)
 
 @bot.tree.command(name="list_auto_msgs", description="View active recurring automated messages")
 async def list_auto_msgs(interaction: discord.Interaction):
@@ -117,9 +117,9 @@ async def list_auto_msgs(interaction: discord.Interaction):
         return await interaction.response.send_message("ℹ️ No active auto-messages found.", ephemeral=True)
     embed = discord.Embed(title="📋 Active Automated Messages", color=discord.Color.blue())
     for r_id, ch_id, delay, msg in records:
-        embed.add_field(name=f"ID #{r_id} | Channel: <#{ch_id}>", value=f"**Interval:** Every {delay} min
-**Message:** {msg}", inline=False)
+        embed.add_field(name=f"ID #{r_id} | Channel: <#{ch_id}>", value=f"**Interval:** Every {delay} min\n**Message:** {msg}", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+    
 
 @bot.tree.command(name="delete_auto_msg", description="Delete an automated message schedule by ID")
 async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
