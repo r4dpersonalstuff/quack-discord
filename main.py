@@ -114,19 +114,6 @@ async def devlog_command(interaction: discord.Interaction, version: str, title: 
     await channel.send(embed=embed)
     await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
 
-class FeedbackModal(discord.ui.Modal, title="Submit Feedback / Bug Report"):
-    subject = discord.ui.TextInput(label="Subject", required=True, max_length=100)
-    details = discord.ui.TextInput(label="Details", style=discord.TextStyle.paragraph, required=True, max_length=1000)
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message("✅ Thank you! Feedback submitted.", ephemeral=True)
-        embed = discord.Embed(title=f"📥 New Feedback: {self.subject.value}", description=self.details.value, color=discord.Color.teal(), timestamp=discord.utils.utcnow())
-        embed.set_footer(text=f"Submitted by {interaction.user.display_name} ({interaction.user.id})")
-        await interaction.channel.send(embed=embed)
-
-@bot.tree.command(name="feedback", description="Open a pop-up form to submit feedback or report a bug")
-async def feedback_command(interaction: discord.Interaction):
-    await interaction.response.send_modal(FeedbackModal())
-
 @bot.tree.command(name="roll", description="Roll a random number or dice")
 async def roll_command(interaction: discord.Interaction, max_value: int = 100):
     if max_value < 1: return await interaction.response.send_message("❌ Max value must be >= 1.", ephemeral=True)
