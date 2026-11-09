@@ -1,2 +1,7 @@
-worker: python main.py
-  
+NAME=RACBot
+TYPE=bot
+MAIN=main.py
+RAM=100
+AUTORESTART=true
+VERSION=latest
+APT=tools
