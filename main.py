@@ -217,7 +217,7 @@ class DenyReasonModal(discord.ui.Modal, title="Deny Post Request"):
             conn.commit()
         embed = self.review_msg.embeds[0]
         embed.color = discord.Color.red()
-        embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**
+        embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**"
 **Reason:** {self.reason.value}", inline=False)
         await self.review_msg.edit(embed=embed, view=None)
         await interaction.response.send_message(f"❌ Post #{self.post_id} denied.", ephemeral=True)
