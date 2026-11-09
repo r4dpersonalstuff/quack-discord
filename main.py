@@ -143,78 +143,109 @@ async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
         await interaction.response.send_message(f"❌ Auto-message ID #{msg_id} not found.", ephemeral=False)
 
 # ==========================================
-# FEATURE: ROLE PICKER (BUTTONS)
+# FEATURE: ROLE PICKER (DROPDOWN MENU)
 # ==========================================
 
-class RoleButton(discord.ui.Button):
-    def __init__(self, role: discord.Role):
-        # Create a button labeled with the role's name
+class RoleSelectMenu(discord.ui.Select):
+    def __init__(self, roles: list[discord.Role]):
+        # Create option items for each role passed to the command
+        options = [
+            discord.SelectOption(
+                label=role.name,
+                value=str(role.id),
+                description=f"Toggle the {role.name} role"
+            )
+            for role in roles
+        ]
+        
         super().__init__(
-            label=role.name, 
-            style=discord.ButtonStyle.primary, 
-            custom_id=f"role_picker_{role.id}"
+            placeholder="Click menu ini untuk memilih roles!",
+            min_values=0,
+            max_values=len(options),
+            options=options,
+            custom_id="dropdown_role_picker"
         )
-        self.role_id = role.id
 
     async def callback(self, interaction: discord.Interaction):
+        selected_ids = set(map(int, self.values))
         guild = interaction.guild
-        role = guild.get_role(self.role_id)
-        
-        if not role:
-            await interaction.response.send_message("❌ Role not found on this server.", ephemeral=True)
-            return
-
         member = interaction.user
-        
-        # Toggle role: Add if missing, Remove if already owned
-        if role in member.roles:
-            await member.remove_roles(role)
-            await interaction.response.send_message(f"➖ Removed role **{role.name}**!", ephemeral=True)
-        else:
-            await member.add_roles(role)
-            await interaction.response.send_message(f"➕ Added role **{role.name}**!", ephemeral=True)
+
+        all_option_ids = {int(opt.value) for opt in self.options}
+
+        roles_to_add = []
+        roles_to_remove = []
+
+        # Compare current selection with member's current roles
+        for role_id in all_option_ids:
+            role = guild.get_role(role_id)
+            if role:
+                if role_id in selected_ids:
+                    if role not in member.roles:
+                        roles_to_add.append(role)
+                else:
+                    if role in member.roles:
+                        roles_to_remove.append(role)
+
+        # Apply role changes
+        if roles_to_add:
+            await member.add_roles(*roles_to_add)
+        if roles_to_remove:
+            await member.remove_roles(*roles_to_remove)
+
+        await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=True)
 
 
-class RolePickerView(discord.ui.View):
+class RolePickerDropdownView(discord.ui.View):
     def __init__(self, roles: list[discord.Role]):
         super().__init__(timeout=None)
-        # Dynamically add a button for each role provided
-        for role in roles:
-            self.add_item(RoleButton(role))
+        self.add_item(RoleSelectMenu(roles))
 
 
-@bot.tree.command(name="rolepicker", description="Create an interactive role picker message with buttons")
+@bot.tree.command(name="rolepicker", description="Create a role picker embed with a multi-select dropdown menu")
 @discord.app_commands.describe(
-    title="Title for the role picker embed",
+    title="Title for the embed",
+    description="Description text displayed in the embed",
     role1="First role option",
     role2="Second role option (optional)",
     role3="Third role option (optional)",
-    role4="Fourth role option (optional)"
+    role4="Fourth role option (optional)",
+    role5="Fifth role option (optional)",
+    role6="Sixth role option (optional)",
+    role7="Seventh role option (optional)",
+    image_url="Optional direct image URL for the banner at the bottom"
 )
 async def rolepicker_command(
     interaction: discord.Interaction,
     title: str,
+    description: str,
     role1: discord.Role,
     role2: discord.Role = None,
     role3: discord.Role = None,
-    role4: discord.Role = None
+    role4: discord.Role = None,
+    role5: discord.Role = None,
+    role6: discord.Role = None,
+    role7: discord.Role = None,
+    image_url: str = None
 ):
-    # Filter out empty role slots
-    selected_roles = [r for r in [role1, role2, role3, role4] if r is not None]
-    
+    # Filter out unused role slots
+    selected_roles = [r for r in [role1, role2, role3, role4, role5, role6, role7] if r is not None]
+
     embed = discord.Embed(
-        title=f"🎭 {title}",
-        description="Click the buttons below to pick or remove your roles!",
-        color=discord.Color.green()
+        title=title,
+        description=description,
+        color=discord.Color.blue()
     )
-    
-    view = RolePickerView(selected_roles)
-    
-    # Send embed & buttons to the current channel
+
+    # Attach banner image if provided
+    if image_url:
+        embed.set_image(url=image_url)
+
+    view = RolePickerDropdownView(selected_roles)
+
     await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message("✅ Dropdown role picker created successfully!", ephemeral=True)
     
-    # Hidden confirmation message for the admin
-    await interaction.response.send_message("✅ Role picker created successfully!", ephemeral=False)
 
 # ==========================================
 # FEATURE: DEVLOG ANNOUNCEMENT (EMBED)
