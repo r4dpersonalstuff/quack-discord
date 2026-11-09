@@ -278,6 +278,195 @@ async def devlog_command(
     # Hidden confirmation message
     await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
 
+# ==========================================
+# FEATURE: POST & POSTS REVIEW SYSTEM
+# ==========================================
+
+# 1. Initialize SQLite Table for Pending Posts
+def init_pending_posts_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            author_id INTEGER NOT NULL,
+            target_channel_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            image_url TEXT,
+            status TEXT DEFAULT 'PENDING'
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_pending_posts_db()
+
+# 2. Modal Form for Denial Reason
+class DenyReasonModal(discord.ui.Modal, title="Deny Post Request"):
+    reason = discord.ui.TextInput(
+        label="Reason for Denial",
+        style=discord.TextStyle.paragraph,
+        placeholder="Provide a reason why this post is denied...",
+        required=True,
+        max_length=500
+    )
+
+    def __init__(self, post_id: int, review_message: discord.Message):
+        super().__init__()
+        self.post_id = post_id
+        self.review_message = review_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Update DB status
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE pending_posts SET status = 'DENIED' WHERE id = ?", (self.post_id,))
+        conn.commit()
+        conn.close()
+
+        # Update the review embed to reflect denial
+        embed = self.review_message.embeds[0]
+        embed.color = discord.Color.red()
+        embed.add_field(
+            name="Status", 
+            value=f"❌ **Denied by {interaction.user.mention}**\n**Reason:** {self.reason.value}", 
+            inline=False
+        )
+        
+        await self.review_message.edit(embed=embed, view=None)
+        await interaction.response.send_message(f"❌ Post #{self.post_id} denied successfully.", ephemeral=True)
+
+
+# 3. Interactive Review Buttons View (Accept / Deny)
+class PostReviewView(discord.ui.View):
+    def __init__(self, post_id: int):
+        super().__init__(timeout=None)
+        self.post_id = post_id
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="btn_accept_post")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT target_channel_id, title, description, image_url, status FROM pending_posts WHERE id = ?", (self.post_id,))
+        row = cursor.fetchone()
+
+        if not row or row[4] != 'PENDING':
+            conn.close()
+            await interaction.response.send_message("❌ This post is no longer pending.", ephemeral=True)
+            return
+
+        target_channel_id, title, description, image_url, _ = row
+        cursor.execute("UPDATE pending_posts SET status = 'ACCEPTED' WHERE id = ?", (self.post_id,))
+        conn.commit()
+        conn.close()
+
+        # Publish the accepted embed to the target channel
+        target_channel = interaction.guild.get_channel(target_channel_id)
+        if target_channel:
+            published_embed = discord.Embed(
+                title=title,
+                description=description,
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
+            if image_url:
+                published_embed.set_image(url=image_url)
+            await target_channel.send(embed=published_embed)
+
+        # Update review embed
+        embed = interaction.message.embeds[0]
+        embed.color = discord.Color.green()
+        embed.add_field(
+            name="Status", 
+            value=f"✅ **Accepted by {interaction.user.mention}** (Published in <#{target_channel_id}>)", 
+            inline=False
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, custom_id="btn_deny_post")
+    async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM pending_posts WHERE id = ?", (self.post_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row or row[0] != 'PENDING':
+            await interaction.response.send_message("❌ This post is no longer pending.", ephemeral=True)
+            return
+
+        # Open pop-up modal to get denial reason
+        await interaction.response.send_modal(DenyReasonModal(self.post_id, interaction.message))
+
+
+# 4. Command /post (Submit Embed Draft)
+@bot.tree.command(name="post", description="Create an embedded post submission for admin review")
+@discord.app_commands.describe(
+    title="Title of the embedded post",
+    description="Content/body text of the embedded post",
+    target_channel="Channel where the post should be published if approved",
+    image_url="Optional banner/image URL for the embed"
+)
+async def post_command(
+    interaction: discord.Interaction,
+    title: str,
+    description: str,
+    target_channel: discord.TextChannel,
+    image_url: str = None
+):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO pending_posts (author_id, target_channel_id, title, description, image_url) VALUES (?, ?, ?, ?, ?)",
+        (interaction.user.id, target_channel.id, title, description, image_url)
+    )
+    post_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(
+        f"📝 Post submitted for review! **Post ID:** `#{post_id}`\nAdmins can review it using `/postsreview post_id:{post_id}`",
+        ephemeral=True
+    )
+
+
+# 5. Command /postsreview (Review & Approve/Deny)
+@bot.tree.command(name="postsreview", description="Review a submitted post embed with Accept/Deny buttons")
+@discord.app_commands.describe(post_id="ID of the submitted post to review")
+async def postsreview_command(interaction: discord.Interaction, post_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT author_id, target_channel_id, title, description, image_url, status FROM pending_posts WHERE id = ?", (post_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        await interaction.response.send_message(f"❌ Post ID `#{post_id}` not found.", ephemeral=True)
+        return
+
+    author_id, target_channel_id, title, description, image_url, status = row
+
+    if status != 'PENDING':
+        await interaction.response.send_message(f"ℹ️ Post ID `#{post_id}` has already been **{status}**.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title=f"🔍 Reviewing Post #{post_id}: {title}",
+        description=description,
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Author", value=f"<@{author_id}>", inline=True)
+    embed.add_field(name="Target Channel", value=f"<#{target_channel_id}>", inline=True)
+    
+    if image_url:
+        embed.set_image(url=image_url)
+
+    view = PostReviewView(post_id)
+    await interaction.response.send_message(embed=embed, view=view)
+    
+
 # BOT EVENTS
 @bot.event
 async def on_ready():
