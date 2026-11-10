@@ -1,7 +1,8 @@
 import sqlite3
 import discord
 
-DB_NAME = "auto_messages.db"
+DB_NAME = "/data/auto_messages.db"
+
 
 # Channel IDs for RAC Marketplace (Replace with actual IDs)
 POST_REVIEW_CHANNEL_ID = 1569503035225415811
@@ -21,7 +22,7 @@ class CancelButton(discord.ui.Button):
         await interaction.response.edit_message(embed=embed, view=None)
 
 class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
-    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Godot Developer", required=True, max_length=100)
+    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Developer", required=True, max_length=100)
     desc_input = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, placeholder="Describe your services, project scope, requirements...", required=True, max_length=1000)
     rates_input = discord.ui.TextInput(label="Rates / Budget", placeholder="e.g., $500/project, $30/hr, or Negotiable", required=True, max_length=100)
     portfolio_input = discord.ui.TextInput(label="Portfolio / Contact Info", placeholder="ArtStation, GitHub, Drive link, preferred contact", required=False, max_length=200)
@@ -247,21 +248,50 @@ class RemovePostModal(discord.ui.Modal, title="Remove Marketplace Post"):
     async def on_submit(self, interaction: discord.Interaction):
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
+            try:
+                cursor.execute("ALTER TABLE market_posts ADD COLUMN message_id INTEGER")
+            except sqlite3.OperationalError:
+                pass
+
             row = cursor.execute(
-                "SELECT author_id, listing_type, title, status FROM market_posts WHERE id = ?", 
+                "SELECT author_id, listing_type, title, status, message_id FROM market_posts WHERE id = ?", 
                 (self.post_id,)
             ).fetchone()
             
             if not row:
-                return await interaction.response.send_message(f"❌ Post `#{self.post_id}` not found.", ephemeral=False)
+                return await interaction.response.send_message(f"❌ Post `#{self.post_id}` tidak ditemukan di database.", ephemeral=True)
             
-            author_id, listing_type, title, status = row
+            author_id, listing_type, title, status, msg_id = row
             
             if status == "REMOVED":
-                return await interaction.response.send_message(f"ℹ️ Post `#{self.post_id}` is already marked as removed.", ephemeral=True)
+                return await interaction.response.send_message(f"ℹ️ Post `#{self.post_id}` sudah ditandai terhapus sebelumnya.", ephemeral=True)
 
             cursor.execute("UPDATE market_posts SET status = 'REMOVED' WHERE id = ?", (self.post_id,))
             conn.commit()
+
+        target_id = LFD_CHANNEL_ID if listing_type == "Sell Services" else FHD_CHANNEL_ID
+        msg_deleted = False
+        delete_error = ""
+
+        # Hapus pesan fisik jika message_id tersedia
+        if msg_id:
+            try:
+                ch = interaction.guild.get_channel(target_id)
+                if not ch:
+                    ch = await interaction.guild.fetch_channel(target_id)
+                
+                if ch:
+                    msg = await ch.fetch_message(msg_id)
+                    await msg.delete()
+                    msg_deleted = True
+            except discord.NotFound:
+                delete_error = "Pesan sudah dihapus manual atau tidak ditemukan di channel."
+            except discord.Forbidden:
+                delete_error = "Bot tidak punya izin 'Manage Messages' (Kelola Pesan) di channel tersebut."
+            except Exception as e:
+                delete_error = f"Error saat menghapus: {e}"
+        else:
+            delete_error = "Postingan ini di-approve SEBELUM fitur pencatatan ID pesan aktif, jadi ID pesannya kosong di database."
 
         # Kirim notifikasi DM ke pembuat postingan
         try:
@@ -276,9 +306,16 @@ class RemovePostModal(discord.ui.Modal, title="Remove Marketplace Post"):
                 embed.add_field(name="Reason for Removal", value=self.reason.value, inline=False)
                 await author.send(embed=embed)
         except Exception as e:
-            print(f"Gagal mengirimi DM ke user {author_id}: {e}")
+            print(f"Gagal mengirim DM ke user {author_id}: {e}")
 
-        await interaction.response.send_message(
-            f"✅ Post `#{self.post_id}` (**{title}**) has been removed.\n**Reason:** {self.reason.value}", 
-            ephemeral=False
-        )
+        # Feedback ke moderator yang menjalankan command
+        if msg_deleted:
+            await interaction.response.send_message(
+                f"✅ Post `#{self.post_id}` (**{title}**) berhasil **DIHAPUS** dari <#{target_id}> & DM dikirim ke user.\n**Alasan:** {self.reason.value}", 
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"⚠️ Status DB diperbarui & DM terkirim, **tapi pesan fisik di channel TIDAK terhapus**.\n**Penyebab:** {delete_error}\n**Alasan:** {self.reason.value}", 
+                ephemeral=True
+            )
