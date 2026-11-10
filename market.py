@@ -168,7 +168,6 @@ class MarketDenyModal(discord.ui.Modal, title="Deny Marketplace Post"):
         await self.review_msg.edit(embed=embed, view=None)
         await interaction.response.send_message(f"❌ Market post #{self.post_id} denied.", ephemeral=False)
 
-
 class MarketReviewView(discord.ui.View):
     def __init__(self, post_id: int):
         super().__init__(timeout=None)
@@ -178,24 +177,46 @@ class MarketReviewView(discord.ui.View):
     async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
+            try:
+                cursor.execute("ALTER TABLE market_posts ADD COLUMN message_id INTEGER")
+            except sqlite3.OperationalError:
+                pass
+
             row = cursor.execute("SELECT author_id, listing_type, skills, title, description, rates_or_budget, portfolio, status FROM market_posts WHERE id = ?", (self.post_id,)).fetchone()
             if not row or row[7] != 'PENDING':
                 return await interaction.response.send_message("❌ This post has already been reviewed.", ephemeral=True)
             author_id, listing_type, skills, title, desc, rates, portfolio, _ = row
-            cursor.execute("UPDATE market_posts SET status = 'ACCEPTED' WHERE id = ?", (self.post_id,))
-            conn.commit()
 
-        target_id = LFD_CHANNEL_ID if listing_type == "Sell Services" else FHD_CHANNEL_ID
-        ch = interaction.guild.get_channel(target_id)
-        if ch:
-            p_embed = discord.Embed(title=f"📢 [{listing_type.upper()}] {title}", description=desc, color=discord.Color.green() if listing_type == "Sell Services" else discord.Color.blue(), timestamp=discord.utils.utcnow())
-            p_embed.add_field(name="Poster", value=f"<@{author_id}>", inline=True)
-            p_embed.add_field(name="Skills / Role", value=skills, inline=True)
-            p_embed.add_field(name="Rates / Budget", value=rates, inline=True)
-            if portfolio and portfolio != "N/A":
-                p_embed.add_field(name="Portfolio / Contact", value=portfolio, inline=False)
-            p_embed.set_footer(text="RAC Marketplace • Safe & Secure Transactions")
-            await ch.send(embed=p_embed)
+            target_id = LFD_CHANNEL_ID if listing_type == "Sell Services" else FHD_CHANNEL_ID
+            
+            # Coba ambil dari cache, jika kosong panggil API Discord secara langsung
+            ch = interaction.guild.get_channel(target_id)
+            if not ch:
+                try:
+                    ch = await interaction.guild.fetch_channel(target_id)
+                except Exception as e:
+                    print(f"Gagal mengambil channel target {target_id}: {e}")
+
+            published_msg_id = None
+            if ch:
+                p_embed = discord.Embed(
+                    title=f"📢 [{listing_type.upper()}] {title}", 
+                    description=desc, 
+                    color=discord.Color.green() if listing_type == "Sell Services" else discord.Color.blue(), 
+                    timestamp=discord.utils.utcnow()
+                )
+                p_embed.add_field(name="Poster", value=f"<@{author_id}>", inline=True)
+                p_embed.add_field(name="Skills / Role", value=skills, inline=True)
+                p_embed.add_field(name="Rates / Budget", value=rates, inline=True)
+                if portfolio and portfolio != "N/A":
+                    p_embed.add_field(name="Portfolio / Contact", value=portfolio, inline=False)
+                p_embed.set_footer(text="RAC Marketplace • Safe & Secure Transactions")
+                
+                sent_msg = await ch.send(embed=p_embed)
+                published_msg_id = sent_msg.id
+
+            cursor.execute("UPDATE market_posts SET status = 'ACCEPTED', message_id = ? WHERE id = ?", (published_msg_id, self.post_id))
+            conn.commit()
 
         author = interaction.client.get_user(author_id)
         if author:

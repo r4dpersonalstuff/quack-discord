@@ -26,11 +26,12 @@ def init_db():
             description TEXT NOT NULL, image_url TEXT, status TEXT DEFAULT 'PENDING'
         )''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS market_posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL,
-            listing_type TEXT NOT NULL, skills TEXT NOT NULL, title TEXT NOT NULL,
-            description TEXT NOT NULL, rates_or_budget TEXT NOT NULL,
-            portfolio TEXT, status TEXT DEFAULT 'PENDING'
-        )''')
+    id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL,
+    listing_type TEXT NOT NULL, skills TEXT NOT NULL, title TEXT NOT NULL,
+    description TEXT NOT NULL, rates_or_budget TEXT NOT NULL,
+    portfolio TEXT, status TEXT DEFAULT 'PENDING', message_id INTEGER
+)''')
+
         conn.commit()
 
 init_db()
