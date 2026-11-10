@@ -4,8 +4,6 @@ import sqlite3
 from datetime import datetime, timedelta
 import discord
 from discord.ext import commands, tasks
-
-# Import modul marketplace
 from market import OpenMarketRequestView, DB_NAME, RemovePostModal, LFD_CHANNEL_ID, FHD_CHANNEL_ID
 
 # ==========================================
