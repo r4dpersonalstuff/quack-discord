@@ -3,12 +3,29 @@ import discord
 
 DB_NAME = "/data/auto_messages.db"
 
+# ==========================================
+# DYNAMIC CONFIG HELPER FUNCTIONS
+# ==========================================
+def get_setting(key: str, default: int = 0) -> int:
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS config_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        row = cursor.execute("SELECT value FROM config_settings WHERE key = ?", (key,)).fetchone()
+        return int(row[0]) if row and row[0].isdigit() else default
 
-# Channel IDs for RAC Marketplace (Replace with actual IDs)
-POST_REVIEW_CHANNEL_ID = 1569503035225415811
-LFD_CHANNEL_ID = 1569500806829576192
-FHD_CHANNEL_ID = 1569500821388001280
+def set_setting(key: str, value: int):
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS config_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        cursor.execute(
+            "INSERT INTO config_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value))
+        )
+        conn.commit()
 
+# ==========================================
+# MARKETPLACE UI COMPONENTS & VIEWS
+# ==========================================
 class CancelButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
@@ -22,7 +39,7 @@ class CancelButton(discord.ui.Button):
         await interaction.response.edit_message(embed=embed, view=None)
 
 class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
-    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Developer", required=True, max_length=100)
+    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Godot Developer", required=True, max_length=100)
     desc_input = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, placeholder="Describe your services, project scope, requirements...", required=True, max_length=1000)
     rates_input = discord.ui.TextInput(label="Rates / Budget", placeholder="e.g., $500/project, $30/hr, or Negotiable", required=True, max_length=100)
     portfolio_input = discord.ui.TextInput(label="Portfolio / Contact Info", placeholder="ArtStation, GitHub, Drive link, preferred contact", required=False, max_length=200)
@@ -47,7 +64,14 @@ class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
         )
         await interaction.response.edit_message(embed=embed_done, view=None)
 
-        review_ch = interaction.client.get_channel(POST_REVIEW_CHANNEL_ID)
+        review_ch_id = get_setting("POST_REVIEW_CHANNEL_ID")
+        review_ch = interaction.client.get_channel(review_ch_id)
+        if not review_ch and review_ch_id:
+            try:
+                review_ch = await interaction.client.fetch_channel(review_ch_id)
+            except Exception:
+                pass
+
         if review_ch:
             embed = discord.Embed(title=f"🔍 Market Review #{post_id}: {self.title_input.value}", description=self.desc_input.value, color=discord.Color.gold(), timestamp=discord.utils.utcnow())
             embed.add_field(name="Author", value=f"<@{interaction.user.id}>", inline=True)
@@ -55,7 +79,9 @@ class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
             embed.add_field(name="Skills / Role", value=skills_str, inline=False)
             embed.add_field(name="Rates / Budget", value=self.rates_input.value, inline=True)
             embed.add_field(name="Portfolio / Contact", value=self.portfolio_input.value or "N/A", inline=True)
-            target_mention = f"<#{LFD_CHANNEL_ID}>" if self.listing_type == "Sell Services" else f"<#{FHD_CHANNEL_ID}>"
+            
+            target_id = get_setting("LFD_CHANNEL_ID") if self.listing_type == "Sell Services" else get_setting("FHD_CHANNEL_ID")
+            target_mention = f"<#{target_id}>" if target_id else "Not Configured"
             embed.add_field(name="Target Channel", value=target_mention, inline=False)
             await review_ch.send(embed=embed, view=MarketReviewView(post_id))
 
@@ -147,7 +173,6 @@ class MarketDenyModal(discord.ui.Modal, title="Deny Marketplace Post"):
                 cursor.execute("UPDATE market_posts SET status = 'DENIED' WHERE id = ?", (self.post_id,))
                 conn.commit()
 
-                # Menggunakan fetch_user agar selalu mengambil data user langsung dari Discord API
                 try:
                     author = await interaction.client.fetch_user(author_id)
                     if author:
@@ -166,15 +191,32 @@ class MarketDenyModal(discord.ui.Modal, title="Deny Marketplace Post"):
         embed.color = discord.Color.red()
         embed.add_field(name="Status", value=f"❌ **Denied by {interaction.user.mention}**\n**Reason:** {self.reason.value}", inline=False)
         await self.review_msg.edit(embed=embed, view=None)
-        await interaction.response.send_message(f"❌ Market post #{self.post_id} denied.", ephemeral=False)
+        await interaction.response.send_message(f"❌ Market post #{self.post_id} denied.", ephemeral=True)
 
 class MarketReviewView(discord.ui.View):
-    def __init__(self, post_id: int):
+    def __init__(self, post_id: int = 0):
         super().__init__(timeout=None)
         self.post_id = post_id
 
+    def _get_post_id(self, interaction: discord.Interaction) -> int:
+        if self.post_id and self.post_id != 0:
+            return self.post_id
+        try:
+            import re
+            title = interaction.message.embeds[0].title
+            match = re.search(r'#(\d+)', title)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            pass
+        return 0
+
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="✅", custom_id="btn_accept_market")
     async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        post_id = self._get_post_id(interaction)
+        if not post_id:
+            return await interaction.response.send_message("❌ ID postingan tidak ditemukan.", ephemeral=True)
+
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             try:
@@ -182,16 +224,15 @@ class MarketReviewView(discord.ui.View):
             except sqlite3.OperationalError:
                 pass
 
-            row = cursor.execute("SELECT author_id, listing_type, skills, title, description, rates_or_budget, portfolio, status FROM market_posts WHERE id = ?", (self.post_id,)).fetchone()
+            row = cursor.execute("SELECT author_id, listing_type, skills, title, description, rates_or_budget, portfolio, status FROM market_posts WHERE id = ?", (post_id,)).fetchone()
             if not row or row[7] != 'PENDING':
-                return await interaction.response.send_message("❌ This post has already been reviewed.", ephemeral=True)
+                return await interaction.response.send_message("❌ Postingan ini sudah ditinjau sebelumnya.", ephemeral=True)
             author_id, listing_type, skills, title, desc, rates, portfolio, _ = row
 
-            target_id = LFD_CHANNEL_ID if listing_type == "Sell Services" else FHD_CHANNEL_ID
+            target_id = get_setting("LFD_CHANNEL_ID") if listing_type == "Sell Services" else get_setting("FHD_CHANNEL_ID")
             
-            # Coba ambil dari cache, jika kosong panggil API Discord secara langsung
             ch = interaction.guild.get_channel(target_id)
-            if not ch:
+            if not ch and target_id:
                 try:
                     ch = await interaction.guild.fetch_channel(target_id)
                 except Exception as e:
@@ -215,16 +256,16 @@ class MarketReviewView(discord.ui.View):
                 sent_msg = await ch.send(embed=p_embed)
                 published_msg_id = sent_msg.id
 
-            cursor.execute("UPDATE market_posts SET status = 'ACCEPTED', message_id = ? WHERE id = ?", (published_msg_id, self.post_id))
+            cursor.execute("UPDATE market_posts SET status = 'ACCEPTED', message_id = ? WHERE id = ?", (published_msg_id, post_id))
             conn.commit()
 
-        author = interaction.client.get_user(author_id)
-        if author:
-            try:
+        try:
+            author = await interaction.client.fetch_user(author_id)
+            if author:
                 dm_embed = discord.Embed(title="🎉 Market Post Approved!", description=f"Your post **'{title}'** has been approved and published in <#{target_id}>!", color=discord.Color.green())
                 await author.send(embed=dm_embed)
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         embed = interaction.message.embeds[0]
         embed.color = discord.Color.green()
@@ -233,11 +274,15 @@ class MarketReviewView(discord.ui.View):
 
     @discord.ui.button(label="Deny", style=discord.ButtonStyle.danger, emoji="❌", custom_id="btn_deny_market")
     async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        post_id = self._get_post_id(interaction)
+        if not post_id:
+            return await interaction.response.send_message("❌ ID postingan tidak ditemukan.", ephemeral=True)
+
         with sqlite3.connect(DB_NAME) as conn:
-            row = conn.cursor().execute("SELECT status FROM market_posts WHERE id = ?", (self.post_id,)).fetchone()
+            row = conn.cursor().execute("SELECT status FROM market_posts WHERE id = ?", (post_id,)).fetchone()
         if not row or row[0] != 'PENDING':
-            return await interaction.response.send_message("❌ This post has already been reviewed.", ephemeral=True)
-        await interaction.response.send_modal(MarketDenyModal(self.post_id, interaction.message))
+            return await interaction.response.send_message("❌ Postingan ini sudah ditinjau sebelumnya.", ephemeral=True)
+        await interaction.response.send_modal(MarketDenyModal(post_id, interaction.message))
 
 class OpenMarketRequestView(discord.ui.View):
     def __init__(self):
@@ -290,15 +335,14 @@ class RemovePostModal(discord.ui.Modal, title="Remove Marketplace Post"):
             cursor.execute("UPDATE market_posts SET status = 'REMOVED' WHERE id = ?", (self.post_id,))
             conn.commit()
 
-        target_id = LFD_CHANNEL_ID if listing_type == "Sell Services" else FHD_CHANNEL_ID
+        target_id = get_setting("LFD_CHANNEL_ID") if listing_type == "Sell Services" else get_setting("FHD_CHANNEL_ID")
         msg_deleted = False
         delete_error = ""
 
-        # Hapus pesan fisik jika message_id tersedia
         if msg_id:
             try:
                 ch = interaction.guild.get_channel(target_id)
-                if not ch:
+                if not ch and target_id:
                     ch = await interaction.guild.fetch_channel(target_id)
                 
                 if ch:
@@ -308,13 +352,12 @@ class RemovePostModal(discord.ui.Modal, title="Remove Marketplace Post"):
             except discord.NotFound:
                 delete_error = "Pesan sudah dihapus manual atau tidak ditemukan di channel."
             except discord.Forbidden:
-                delete_error = "Bot tidak punya izin 'Manage Messages' (Kelola Pesan) di channel tersebut."
+                delete_error = "Bot tidak punya izin 'Manage Messages' di channel tersebut."
             except Exception as e:
                 delete_error = f"Error saat menghapus: {e}"
         else:
-            delete_error = "Postingan ini di-approve SEBELUM fitur pencatatan ID pesan aktif, jadi ID pesannya kosong di database."
+            delete_error = "ID pesan kosong di database (postingan lama atau gagal terbit)."
 
-        # Kirim notifikasi DM ke pembuat postingan
         try:
             author = await interaction.client.fetch_user(author_id)
             if author:
@@ -329,7 +372,6 @@ class RemovePostModal(discord.ui.Modal, title="Remove Marketplace Post"):
         except Exception as e:
             print(f"Gagal mengirim DM ke user {author_id}: {e}")
 
-        # Feedback ke moderator yang menjalankan command
         if msg_deleted:
             await interaction.response.send_message(
                 f"✅ Post `#{self.post_id}` (**{title}**) berhasil **DIHAPUS** dari <#{target_id}> & DM dikirim ke user.\n**Alasan:** {self.reason.value}", 
@@ -339,4 +381,6 @@ class RemovePostModal(discord.ui.Modal, title="Remove Marketplace Post"):
             await interaction.response.send_message(
                 f"⚠️ Status DB diperbarui & DM terkirim, **tapi pesan fisik di channel TIDAK terhapus**.\n**Penyebab:** {delete_error}\n**Alasan:** {self.reason.value}", 
                 ephemeral=True
-            )
+                
+			)
+
