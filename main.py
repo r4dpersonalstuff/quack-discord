@@ -352,71 +352,64 @@ async def postremove_command(interaction: discord.Interaction, post_id: int):
     await interaction.response.send_modal(RemovePostModal(post_id))
 
 # ==========================================
-# 7. DYNAMIC SETTINGS COMMAND
+# 7. CONFIG & SETTINGS COMMANDS
 # ==========================================
-@bot.tree.command(name="settings", description="Manage RAC Marketplace channel configurations dynamically")
+@bot.tree.command(name="settings", description="Show RAC Marketplace configuration status")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def settings_command(interaction: discord.Interaction):
+    review_id = get_setting("POST_REVIEW_CHANNEL_ID")
+    lfd_id = get_setting("LFD_CHANNEL_ID")
+    fhd_id = get_setting("FHD_CHANNEL_ID")
+
+    def get_status(ch_id):
+        return f"✅ <#{ch_id}>" if ch_id else "❌ **Not Set**"
+
+    embed = discord.Embed(
+        title=f"RAC Marketplace config for {interaction.guild.name}",
+        color=discord.Color.dark_theme()
+    )
+
+    embed.description = (
+        "**Post Review Channel**\n"
+        f"Channels: {get_status(review_id)}\n\n"
+        "**LFD Channel (Sell Services)**\n"
+        f"Channels: {get_status(lfd_id)}\n\n"
+        "**FHD Channel (Buy / Hire)**\n"
+        f"Channels: {get_status(fhd_id)}"
+    )
+
+    embed.set_footer(text="Gunakan perintah /set_channel untuk mengubah konfigurasi.")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="set_channel", description="Set a target channel for RAC Marketplace")
 @discord.app_commands.describe(
-    action="Choose action: View current settings or Set new channel",
     target="Select which channel setting to update",
-    channel="Select the new target text channel"
+    channel="Select the target text channel"
 )
 @discord.app_commands.choices(
-    action=[
-        discord.app_commands.Choice(name="👀 View Config", value="view"),
-        discord.app_commands.Choice(name="⚙️ Set Channel", value="set")
-    ],
     target=[
-        discord.app_commands.Choice(name="🔍 Post Review Channel", value="POST_REVIEW_CHANNEL_ID"),
-        discord.app_commands.Choice(name="💼 LFD Channel (Sell Services)", value="LFD_CHANNEL_ID"),
-        discord.app_commands.Choice(name="🛒 FHD Channel (Buy / Hire)", value="FHD_CHANNEL_ID")
+        discord.app_commands.Choice(name="Post Review Channel", value="POST_REVIEW_CHANNEL_ID"),
+        discord.app_commands.Choice(name="LFD Channel (Sell Services)", value="LFD_CHANNEL_ID"),
+        discord.app_commands.Choice(name="FHD Channel (Buy / Hire)", value="FHD_CHANNEL_ID")
     ]
 )
 @discord.app_commands.checks.has_permissions(administrator=True)
-async def settings_command(
-    interaction: discord.Interaction, 
-    action: str, 
-    target: str = None, 
-    channel: discord.TextChannel = None
-):
-    if action == "view":
-        review_id = get_setting("POST_REVIEW_CHANNEL_ID")
-        lfd_id = get_setting("LFD_CHANNEL_ID")
-        fhd_id = get_setting("FHD_CHANNEL_ID")
+async def set_channel_command(interaction: discord.Interaction, target: str, channel: discord.TextChannel):
+    set_setting(target, channel.id)
 
-        embed = discord.Embed(
-            title="⚙️ RAC Marketplace Configuration",
-            description="Berikut adalah konfigurasi channel aktif saat ini:",
-            color=discord.Color.blue(),
-            timestamp=discord.utils.utcnow()
-        )
-        embed.add_field(name="🔍 Post Review Channel", value=f"<#{review_id}> (`{review_id}`)" if review_id else "❌ Belum Diatur", inline=False)
-        embed.add_field(name="💼 LFD Channel (Sell Services)", value=f"<#{lfd_id}> (`{lfd_id}`)" if lfd_id else "❌ Belum Diatur", inline=False)
-        embed.add_field(name="🛒 FHD Channel (Buy / Hire)", value=f"<#{fhd_id}> (`{fhd_id}`)" if fhd_id else "❌ Belum Diatur", inline=False)
-        embed.set_footer(text="Gunakan `/settings set` untuk mengubah konfigurasi.")
-        
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+    target_names = {
+        "POST_REVIEW_CHANNEL_ID": "Post Review Channel",
+        "LFD_CHANNEL_ID": "LFD Channel (Sell Services)",
+        "FHD_CHANNEL_ID": "FHD Channel (Buy / Hire)"
+    }
+    
+    name = target_names.get(target, target)
+    await interaction.response.send_message(
+        f"✅ **{name}** berhasil diatur ke {channel.mention} (`{channel.id}`).",
+        ephemeral=True
+    )
 
-    elif action == "set":
-        if not target or not channel:
-            return await interaction.response.send_message(
-                "❌ Untuk mengubah pengaturan (`set`), kamu harus memilih `target` dan `channel`!", 
-                ephemeral=True
-            )
-
-        set_setting(target, channel.id)
-
-        target_names = {
-            "POST_REVIEW_CHANNEL_ID": "Post Review Channel",
-            "LFD_CHANNEL_ID": "LFD Channel (Sell Services)",
-            "FHD_CHANNEL_ID": "FHD Channel (Buy / Hire)"
-        }
-        
-        name = target_names.get(target, target)
-        await interaction.response.send_message(
-            f"✅ **{name}** berhasil diubah ke {channel.mention} (`{channel.id}`).\n"
-            f"💾 Perubahan telah disimpan ke database SQLite dan aman dari restart/redeploy.",
-            ephemeral=True
-        )
 
 # ==========================================
 # 8. BOT EVENTS & RUN
