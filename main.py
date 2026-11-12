@@ -134,6 +134,7 @@ async def on_message(message: discord.Message):
 
 # AUTOMATED MESSAGES MANAGEMENT (RANDOM POOL)
 @bot.tree.command(name="add_auto_msg", description="Add a message to a channel's auto-message pool")
+@discord.app_commands.default_permissions(manage_messages=True)
 @discord.app_commands.describe(
     channel="Target channel", 
     message="Message content", 
@@ -176,6 +177,7 @@ async def add_auto_msg(
     )
 
 @bot.tree.command(name="set_auto_interval", description="Change recurring interval delay for a channel")
+@discord.app_commands.default_permissions(manage_messages=True)
 @discord.app_commands.describe(channel="Target channel", delay_minutes="Interval delay in minutes")
 async def set_auto_interval(interaction: discord.Interaction, channel: discord.TextChannel, delay_minutes: int):
     if delay_minutes < 1:
@@ -197,6 +199,7 @@ async def set_auto_interval(interaction: discord.Interaction, channel: discord.T
     )
 
 @bot.tree.command(name="list_auto_msgs", description="View active recurring automated message pools")
+@discord.app_commands.default_permissions(manage_messages=True)
 async def list_auto_msgs(interaction: discord.Interaction):
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
@@ -219,6 +222,7 @@ async def list_auto_msgs(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
 @bot.tree.command(name="delete_auto_msg", description="Delete an automated message from pool by ID")
+@discord.app_commands.default_permissions(manage_messages=True)
 async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
@@ -239,11 +243,13 @@ async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
 
 # UTILITY & FUN COMMANDS
 @bot.tree.command(name="say", description="Send a custom message to a specific channel")
+@discord.app_commands.default_permissions(manage_messages=True)
 async def say_custom(interaction: discord.Interaction, message: str, channel: discord.TextChannel):
     await channel.send(message)
     await interaction.response.send_message(f"✅ Message sent to {channel.mention}!", ephemeral=False)
 
 @bot.tree.command(name="devlog", description="Send a formatted update / devlog announcement")
+@discord.app_commands.default_permissions(manage_messages=True)
 async def devlog_command(interaction: discord.Interaction, version: str, title: str, changes: str, channel: discord.TextChannel):
     embed = discord.Embed(title=f"Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"Posted by {interaction.user.display_name}")
@@ -272,9 +278,7 @@ async def coinflip_command(interaction: discord.Interaction):
 async def rate_command(interaction: discord.Interaction, thing: str):
     await interaction.response.send_message(f"⭐ I rate **{thing}** a **{random.randint(0, 100)}%**!")
 
-# ==========================================
-# 5. ROLE PICKER (FORM + DROPDOWN SETUP)
-# ==========================================
+# ROLE PICKER (FORM + DROPDOWN SETUP)
 class RoleSelectMenu(discord.ui.Select):
     def __init__(self, roles: list[discord.Role] = None):
         if roles:
@@ -426,12 +430,15 @@ class RolePickerModal(discord.ui.Modal, title="Setup Role Picker"):
         await interaction.response.send_message(embed=preview_embed, view=view, ephemeral=False)
 
 @bot.tree.command(name="rolepicker", description="Create a role picker embed with interactive form & dropdown")
+@discord.app_commands.default_permissions(manage_roles=True)
 @discord.app_commands.checks.has_permissions(manage_roles=True)
 async def rolepicker_command(interaction: discord.Interaction):
     await interaction.response.send_modal(RolePickerModal())
 
 # MARKETPLACE SETUP & MODERATION COMMANDS
 @bot.tree.command(name="setup_market", description="Setup the Marketplace panel embed in the current channel")
+@discord.app_commands.default_permissions(administrator=True)
+@discord.app_commands.checks.has_permissions(administrator=True)
 async def setup_market_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 RaDS MARKETPLACE",
@@ -450,6 +457,7 @@ async def setup_market_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="marketplaceban", description="Ban a user from accessing Marketplace channels")
 @discord.app_commands.describe(user="Target user to ban", reason="Reason for marketplace ban")
+@discord.app_commands.default_permissions(manage_roles=True)
 @discord.app_commands.checks.has_permissions(manage_roles=True)
 async def marketplaceban_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Violation of marketplace rules"):
     lfd_id = get_setting("LFD_CHANNEL_ID")
@@ -482,12 +490,14 @@ async def marketplaceban_command(interaction: discord.Interaction, user: discord
 
 @bot.tree.command(name="postremove", description="Remove a marketplace post by ID with a reason prompt")
 @discord.app_commands.describe(post_id="ID of the post to remove")
+@discord.app_commands.default_permissions(manage_messages=True)
 @discord.app_commands.checks.has_permissions(manage_messages=True)
 async def postremove_command(interaction: discord.Interaction, post_id: int):
     await interaction.response.send_modal(RemovePostModal(post_id))
 
 # CONFIG & SETTINGS COMMANDS
 @bot.tree.command(name="settings", description="Show Marketplace configuration status")
+@discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.checks.has_permissions(administrator=True)
 async def settings_command(interaction: discord.Interaction):
     review_id = get_setting("POST_REVIEW_CHANNEL_ID")
@@ -527,6 +537,7 @@ async def settings_command(interaction: discord.Interaction):
         discord.app_commands.Choice(name="FHD Channel (Buy / Hire)", value="FHD_CHANNEL_ID")
     ]
 )
+@discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.checks.has_permissions(administrator=True)
 async def set_channel_command(interaction: discord.Interaction, target: str, channel: discord.TextChannel):
     set_setting(target, channel.id)
