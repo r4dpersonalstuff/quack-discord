@@ -144,14 +144,14 @@ async def on_message(message: discord.Message):
         clean_text = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
 
         has_name = bool(re.search(r"\brads\b", clean_text, re.IGNORECASE))
-        has_hello = bool(re.search(r"\b(hello|halo|hi|hai)\b", clean_text, re.IGNORECASE))
+        has_hello = bool(re.search(r"\b(hello|halo|hi|hai|yo)\b", clean_text, re.IGNORECASE))
 
         # 1. Pemicu sapaan ("RaDS" atau @mention + "Hello")
         if (is_mentioned or has_name) and has_hello:
             greetings = [
-                f"👋 Hello {message.author.mention}! Ada yang bisa aku bantu?",
-                f"👋 Hai {message.author.mention}! Senang bertemu denganmu!",
-                f"👋 Hello! RaDS siap membantu, {message.author.mention}!"
+                f"Hello {message.author.mention}! Is there anything I can help?",
+                f"Hi {message.author.mention}! Nice to meet you!",
+                f"Yo! RaDS here!"
             ]
             await message.reply(random.choice(greetings))
             return
