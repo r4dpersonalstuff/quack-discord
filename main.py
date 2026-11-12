@@ -7,9 +7,7 @@ from discord.ext import commands, tasks
 
 from market import OpenMarketRequestView, MarketReviewView, DB_NAME, RemovePostModal, get_setting, set_setting
 
-# ==========================================
-# 1. BOT INITIALIZATION & DATABASE SETUP
-# ==========================================
+# BOT INITIALIZATION & DATABASE SETUP
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -23,6 +21,26 @@ def init_db():
             delay_minutes INTEGER NOT NULL,
             next_run TEXT NOT NULL
         )''')
+        
+        # Cek apakah tabel auto_messages masih memakai struktur lama
+        cursor.execute("PRAGMA table_info(auto_messages)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if "delay_minutes" in columns:
+            cursor.execute("""
+                INSERT OR IGNORE INTO channel_schedules (channel_id, delay_minutes, next_run)
+                SELECT channel_id, delay_minutes, next_run FROM auto_messages
+            """)
+            cursor.execute("ALTER TABLE auto_messages RENAME TO auto_messages_old")
+            cursor.execute('''CREATE TABLE auto_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                message TEXT NOT NULL
+            )''')
+            cursor.execute("""
+                INSERT INTO auto_messages (id, channel_id, message)
+                SELECT id, channel_id, message FROM auto_messages_old
+            """)
+            cursor.execute("DROP TABLE auto_messages_old")
         
         cursor.execute('''CREATE TABLE IF NOT EXISTS auto_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,9 +69,15 @@ def init_db():
 
 init_db()
 
-# ==========================================
-# 2. BACKGROUND TASKS & DM ABORT LISTENER
-# ==========================================
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    msg = f"❌ There is an error: `{error}`"
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
+
+# BACKGROUND TASKS & DM ABORT LISTENER
 @tasks.loop(minutes=1)
 async def check_scheduled_messages():
     now_str = datetime.now().isoformat()
@@ -78,14 +102,14 @@ async def check_scheduled_messages():
                     try:
                         ch = await bot.fetch_channel(ch_id)
                     except Exception as e:
-                        print(f"Gagal mengambil channel {ch_id}: {e}")
+                        print(f"Failed to retrieve channel {ch_id}: {e}")
                         ch = None
                 
                 if ch:
                     try:
                         await ch.send(chosen_msg)
                     except Exception as e:
-                        print(f"Gagal mengirim auto-message ke channel {ch_id}: {e}")
+                        print(f"Failed to send auto-message to the channel {ch_id}: {e}")
             
             next_run = (datetime.now() + timedelta(minutes=delay)).isoformat()
             cursor.execute(
@@ -111,9 +135,8 @@ async def on_message(message: discord.Message):
             return
     await bot.process_commands(message)
 
-# ==========================================
-# 3. AUTOMATED MESSAGES MANAGEMENT (RANDOM POOL)
-# ==========================================
+
+# AUTOMATED MESSAGES MANAGEMENT (RANDOM POOL)
 @bot.tree.command(name="add_auto_msg", description="Add a message to a channel's auto-message pool")
 @discord.app_commands.describe(
     channel="Target channel", 
@@ -132,8 +155,8 @@ async def add_auto_msg(
         
         if not sched and (delay_minutes is None or delay_minutes < 1):
             return await interaction.response.send_message(
-                "❌ Channel ini belum memiliki jadwal interval. Harap isi parameter `delay_minutes` (minimal 1 menit).", 
-                ephemeral=True
+                "❌ This channel does not yet have an interval schedule. Please provide the 'delay_minutes' parameter (minimum 1 minute).", 
+                ephemeral=False
             )
         
         if delay_minutes and delay_minutes >= 1:
@@ -150,8 +173,8 @@ async def add_auto_msg(
         current_delay = delay_minutes if (delay_minutes and delay_minutes >= 1) else (sched[0] if sched else 0)
 
     await interaction.response.send_message(
-        f"✅ Pesan berhasil ditambahkan ke pool auto-message {channel.mention}!\n"
-        f"⏱️ **Interval Channel:** Setiap **{current_delay} menit** (1 pesan acak akan dikirim).\n"
+        f"✅ Message successfully added to the auto-message pool {channel.mention}!\n"
+        f"⏱️ **Interval Channel:** Every **{current_delay} menit** (1 random message will be sent).\n"
         f"📝 **Pesan:** {message}",
         ephemeral=True
     )
