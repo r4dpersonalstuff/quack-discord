@@ -278,17 +278,36 @@ async def coinflip_command(interaction: discord.Interaction):
 async def rate_command(interaction: discord.Interaction, thing: str):
     await interaction.response.send_message(f"⭐ I rate **{thing}** a **{random.randint(0, 100)}%**!")
 
-# =================================
-# 5. ROLE PICKER (DROPDOWN)
-# =================================
+# ==========================================
+# 5. ROLE PICKER (FORM + DROPDOWN SETUP)
+# ==========================================
 class RoleSelectMenu(discord.ui.Select):
-    def __init__(self, roles: list[discord.Role]):
-        options = [discord.SelectOption(label=r.name, value=str(r.id), description=f"Toggle {r.name}") for r in roles]
-        super().__init__(placeholder="Click here to select your roles!", min_values=0, max_values=len(options), options=options, custom_id="dropdown_role_picker")
+    def __init__(self, roles: list[discord.Role] = None):
+        if roles:
+            options = [discord.SelectOption(label=r.name, value=str(r.id), description=f"Toggle {r.name}") for r in roles]
+        else:
+            options = [discord.SelectOption(label="Placeholder", value="0")]
+        super().__init__(
+            placeholder="Click here to select your roles!",
+            min_values=0,
+            max_values=len(options),
+            options=options,
+            custom_id="dropdown_role_picker"
+        )
 
     async def callback(self, interaction: discord.Interaction):
         selected = set(map(int, self.values))
-        all_opts = {int(opt.value) for opt in self.options}
+        all_opts = set()
+        if interaction.message and interaction.message.components:
+            for row in interaction.message.components:
+                for child in row.children:
+                    if hasattr(child, "options"):
+                        for opt in child.options:
+                            if opt.value.isdigit() and int(opt.value) != 0:
+                                all_opts.add(int(opt.value))
+        if not all_opts:
+            all_opts = {int(opt.value) for opt in self.options if opt.value.isdigit() and int(opt.value) != 0}
+
         to_add = [r for r_id in selected if (r := interaction.guild.get_role(r_id)) and r not in interaction.user.roles]
         to_rem = [r for r_id in (all_opts - selected) if (r := interaction.guild.get_role(r_id)) and r in interaction.user.roles]
         try:
@@ -296,35 +315,134 @@ class RoleSelectMenu(discord.ui.Select):
                 await interaction.user.add_roles(*to_add)
             if to_rem:
                 await interaction.user.remove_roles(*to_rem)
-            await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=True)
+            await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=False)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Failed to update roles! Make sure the Bot's role is above the target roles in Server Settings and has 'Manage Roles' permission.", ephemeral=True)
+            await interaction.response.send_message("❌ Failed to updated role! Make sure the bot's role placed ABOVE' role target and have the 'Manage Roles' permission.",ephemeral=False)
         except Exception as e:
-            await interaction.response.send_message(f"❌ An error occurred: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ An error occurred: {e}", ephemeral=False)
 
 class RolePickerDropdownView(discord.ui.View):
-    def __init__(self, roles: list[discord.Role]):
+    def __init__(self, roles: list[discord.Role] = None):
         super().__init__(timeout=None)
         self.add_item(RoleSelectMenu(roles))
 
-@bot.tree.command(name="rolepicker", description="Create a role picker embed with dropdown menu")
-async def rolepicker_command(interaction: discord.Interaction, title: str, description: str, role1: discord.Role, role2: discord.Role = None, role3: discord.Role = None, role4: discord.Role = None, role5: discord.Role = None, role6: discord.Role = None, role7: discord.Role = None, image_url: str = None):
-    roles = [r for r in [role1, role2, role3, role4, role5, role6, role7] if r]
-    embed = discord.Embed(title=title, description=description, color=discord.Color.blue())
-    if image_url:
-        embed.set_image(url=image_url)
-    await interaction.channel.send(embed=embed, view=RolePickerDropdownView(roles))
-    await interaction.response.send_message("✅ Role picker created!", ephemeral=True)
+class RolePickerSetupRoleSelect(discord.ui.RoleSelect):
+    def __init__(self):
+        super().__init__(placeholder="Select the roles you want to add (max 25)...", min_values=1, max_values=25)
 
-# ==========================================
-# 6. MARKETPLACE SETUP & MODERATION COMMANDS
-# ==========================================
-@bot.tree.command(name="setup_market", description="Setup the RAC Marketplace panel embed in the current channel")
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selected_roles = list(self.values)
+        await interaction.response.defer()
+
+class RolePickerSetupChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="Select the destination channel for delivery...",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.target_channel_id = self.values[0].id
+        await interaction.response.defer()
+
+class RolePickerSetupView(discord.ui.View):
+    def __init__(self, title: str, description: str, image_url: str = None):
+        super().__init__(timeout=300)
+        self.embed_title = title
+        self.embed_description = description
+        self.image_url = image_url
+        self.selected_roles: list[discord.Role] = []
+        self.target_channel_id: int = None
+
+        self.add_item(RolePickerSetupRoleSelect())
+        self.add_item(RolePickerSetupChannelSelect())
+
+    @discord.ui.button(label="Send Role Picker", style=discord.ButtonStyle.success, emoji="✅", row=2)
+    async def publish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_roles:
+            return await interaction.response.send_message("❌ Select at least 1 role first in the first dropdown!", ephemeral=False)
+        if not self.target_channel_id:
+            return await interaction.response.send_message("❌ Select the destination channel first in the second dropdown.!", ephemeral=False)
+
+        target_ch = interaction.guild.get_channel(self.target_channel_id)
+        if not target_ch:
+            try:
+                target_ch = await interaction.guild.fetch_channel(self.target_channel_id)
+            except Exception as e:
+                return await interaction.response.send_message(f"❌ Failed to access the target channel: `{e}`", ephemeral=False)
+
+        embed = discord.Embed(title=self.embed_title, description=self.embed_description, color=discord.Color.blue())
+        if self.image_url:
+            embed.set_image(url=self.image_url)
+
+        try:
+            await target_ch.send(embed=embed, view=RolePickerDropdownView(self.selected_roles))
+        except discord.Forbidden:
+            return await interaction.response.send_message(f"❌ Bot does not have permission to send messages on {target_ch.mention}!", ephemeral=False)
+        except Exception as e:
+            return await interaction.response.send_message(f"❌ Error while sending `{e}`", ephemeral=False)
+
+        done_embed = discord.Embed(
+            title="✅ Role Picker Created Succeesfully!",
+            description=f"The role picker panel has been sent to {target_ch.mention} with **{len(self.selected_roles)}** role selection.",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=done_embed, view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️", row=2)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cancel_embed = discord.Embed(title="❌ Role Picker Creation Cancelled", color=discord.Color.red())
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+
+class RolePickerModal(discord.ui.Modal, title="Setup Role Picker"):
+    title_input = discord.ui.TextInput(
+        label="Title",
+        placeholder="Example: Choose Your Role!",
+        required=True,
+        max_length=100
+    )
+    desc_input = discord.ui.TextInput(
+        label="Description",
+        style=discord.TextStyle.paragraph,
+        placeholder="Explain the function of each role here...",
+        required=True,
+        max_length=2000
+    )
+    image_input = discord.ui.TextInput(
+        label="Image URL (Optional)",
+        placeholder="https://... (leave blank if not using an image)",
+        required=False,
+        max_length=300
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        img_url = self.image_input.value.strip() or None
+        preview_embed = discord.Embed(
+            title="🛠 Step 2: Select Role & Destination Channel",
+            description=(
+                f"**Title:** {self.title_input.value}\n"
+                f"**Description:** {self.desc_input.value[:200]}{'...' if len(self.desc_input.value) > 200 else ''}\n\n"
+                "Please select **list of roles** (maximum 25) and the **destination channel** via the dropdown menu below, then click **Send Role Picker**."
+            ),
+            color=discord.Color.blue()
+        )
+        view = RolePickerSetupView(self.title_input.value, self.desc_input.value, img_url)
+        await interaction.response.send_message(embed=preview_embed, view=view, ephemeral=False)
+
+@bot.tree.command(name="rolepicker", description="Create a role picker embed with interactive form & dropdown")
+@discord.app_commands.checks.has_permissions(manage_roles=True)
+async def rolepicker_command(interaction: discord.Interaction):
+    await interaction.response.send_modal(RolePickerModal())
+
+# MARKETPLACE SETUP & MODERATION COMMANDS
+@bot.tree.command(name="setup_market", description="Setup the Marketplace panel embed in the current channel")
 async def setup_market_command(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="📋 RAC MARKETPLACE",
+        title="📋 RaDS MARKETPLACE",
         description=(
-            "Welcome to the RAC Marketplace! Here you can:\n\n"
+            "Welcome to the RaDS Marketplace! Here you can:\n\n"
             "🛒 **Buy or Hire** — Find talented designers / developers for your project\n"
             "💼 **Sell Services** — Offer your skills to potential clients\n\n"
             "Click the button below to get started. The process takes place in your DMs for privacy.\n\n"
@@ -332,11 +450,11 @@ async def setup_market_command(interaction: discord.Interaction):
         ),
         color=discord.Color.blue()
     )
-    embed.set_footer(text="RAC Marketplace • Safe & Secure Transactions")
+    embed.set_footer(text="RaDS Marketplace • Safe & Secure Transactions")
     await interaction.channel.send(embed=embed, view=OpenMarketRequestView())
     await interaction.response.send_message("✅ Marketplace panel created!", ephemeral=True)
 
-@bot.tree.command(name="marketplaceban", description="Ban a user from accessing RAC Marketplace channels")
+@bot.tree.command(name="marketplaceban", description="Ban a user from accessing Marketplace channels")
 @discord.app_commands.describe(user="Target user to ban", reason="Reason for marketplace ban")
 @discord.app_commands.checks.has_permissions(manage_roles=True)
 async def marketplaceban_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Violation of marketplace rules"):
@@ -357,7 +475,7 @@ async def marketplaceban_command(interaction: discord.Interaction, user: discord
     try:
         embed = discord.Embed(
             title="⛔ Marketplace Access Revoked",
-            description="You have been restricted from viewing and posting in RAC Marketplace channels.",
+            description="You have been restricted from viewing and posting in the Marketplace channels.",
             color=discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
@@ -366,7 +484,7 @@ async def marketplaceban_command(interaction: discord.Interaction, user: discord
     except Exception:
         pass
 
-    await interaction.response.send_message(f"🚫 {user.mention} has been banned from RAC Marketplace channels.\n**Reason:** {reason}", ephemeral=True)
+    await interaction.response.send_message(f"🚫 {user.mention} has been banned from the Marketplace channels.\n**Reason:** {reason}", ephemeral=False)
 
 @bot.tree.command(name="postremove", description="Remove a marketplace post by ID with a reason prompt")
 @discord.app_commands.describe(post_id="ID of the post to remove")
@@ -374,10 +492,8 @@ async def marketplaceban_command(interaction: discord.Interaction, user: discord
 async def postremove_command(interaction: discord.Interaction, post_id: int):
     await interaction.response.send_modal(RemovePostModal(post_id))
 
-# ==========================================
-# 7. CONFIG & SETTINGS COMMANDS
-# ==========================================
-@bot.tree.command(name="settings", description="Show RAC Marketplace configuration status")
+# CONFIG & SETTINGS COMMANDS
+@bot.tree.command(name="settings", description="Show Marketplace configuration status")
 @discord.app_commands.checks.has_permissions(administrator=True)
 async def settings_command(interaction: discord.Interaction):
     review_id = get_setting("POST_REVIEW_CHANNEL_ID")
@@ -388,7 +504,7 @@ async def settings_command(interaction: discord.Interaction):
         return f"✅ <#{ch_id}>" if ch_id else "❌ **Not Set**"
 
     embed = discord.Embed(
-        title=f"RAC Marketplace config for {interaction.guild.name}",
+        title=f"Marketplace config for {interaction.guild.name}",
         color=discord.Color.dark_theme()
     )
 
@@ -401,11 +517,11 @@ async def settings_command(interaction: discord.Interaction):
         f"Channels: {get_status(fhd_id)}"
     )
 
-    embed.set_footer(text="Gunakan perintah /set_channel untuk mengubah konfigurasi.")
+    embed.set_footer(text="Use the /set_channel command to change the configuration.")
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="set_channel", description="Set a target channel for RAC Marketplace")
+@bot.tree.command(name="set_channel", description="Set a target channel for the Marketplace")
 @discord.app_commands.describe(
     target="Select which channel setting to update",
     channel="Select the target text channel"
@@ -429,22 +545,20 @@ async def set_channel_command(interaction: discord.Interaction, target: str, cha
     
     name = target_names.get(target, target)
     await interaction.response.send_message(
-        f"✅ **{name}** berhasil diatur ke {channel.mention} (`{channel.id}`).",
+        f"✅ **{name}** successfully set to {channel.mention} (`{channel.id}`).",
         ephemeral=True
     )
 
-
-# ==========================================
-# 8. BOT EVENTS & RUN
-# ==========================================
+# BOT EVENTS & RUN
 @bot.event
 async def on_ready():
-    print("=================================")
+    print("===========================")
     print(f"Bot successfully online as: {bot.user}")
-    print("=================================")
+    print("===========================")
     
     bot.add_view(OpenMarketRequestView())
     bot.add_view(MarketReviewView())
+    bot.add_view(RolePickerDropdownView())
     
     try:
         synced = await bot.tree.sync()
