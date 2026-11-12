@@ -3,9 +3,7 @@ import discord
 
 DB_NAME = "/data/auto_messages.db"
 
-# ==========================================
 # DYNAMIC CONFIG HELPER FUNCTIONS
-# ==========================================
 def get_setting(key: str, default: int = 0) -> int:
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
@@ -39,7 +37,7 @@ class CancelButton(discord.ui.Button):
         await interaction.response.edit_message(embed=embed, view=None)
 
 class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
-    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Godot Developer", required=True, max_length=100)
+    title_input = discord.ui.TextInput(label="Title / Headline", placeholder="e.g., 3D Modeler for Hire / Need Developer", required=True, max_length=100)
     desc_input = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, placeholder="Describe your services, project scope, requirements...", required=True, max_length=1000)
     rates_input = discord.ui.TextInput(label="Rates / Budget", placeholder="e.g., $500/project, $30/hr, or Negotiable", required=True, max_length=100)
     portfolio_input = discord.ui.TextInput(label="Portfolio / Contact Info", placeholder="ArtStation, GitHub, Drive link, preferred contact", required=False, max_length=200)
@@ -74,6 +72,7 @@ class MarketDetailsModal(discord.ui.Modal, title="Marketplace Listing Details"):
 
         if review_ch:
             embed = discord.Embed(title=f"🔍 Market Review #{post_id}: {self.title_input.value}", description=self.desc_input.value, color=discord.Color.gold(), timestamp=discord.utils.utcnow())
+            embed.add_field(name="Post ID", value=f"`#{post_id}`", inline=True)
             embed.add_field(name="Author", value=f"<@{interaction.user.id}>", inline=True)
             embed.add_field(name="Type", value=self.listing_type, inline=True)
             embed.add_field(name="Skills / Role", value=skills_str, inline=False)
@@ -92,7 +91,7 @@ class MarketSkillSelect(discord.ui.Select):
             ("Animator", "2D/3D Animation, Rigging, Motion Graphics"),
             ("Artist", "Concept Art, Pixel Art, Textures, 2D Sprites"),
             ("Builder", "Level Design, World Building, Map Environment"),
-            ("Scripting", "Gameplay Programming, Systems, GDScript/Luau/C#"),
+            ("Scripting", "Gameplay Programming, Systems, Luau"),
             ("Sound Composer", "Music Production, SFX, Audio Design"),
             ("UI/UX", "User Interface, Layout Design, HUD Systems"),
             ("VFX", "Particle Systems, Shaders, Visual Effects"),
@@ -251,7 +250,7 @@ class MarketReviewView(discord.ui.View):
                 p_embed.add_field(name="Rates / Budget", value=rates, inline=True)
                 if portfolio and portfolio != "N/A":
                     p_embed.add_field(name="Portfolio / Contact", value=portfolio, inline=False)
-                p_embed.set_footer(text="RAC Marketplace • Safe & Secure Transactions")
+                p_embed.set_footer(text=f"RAC Marketplace • Post ID: #{post_id} • Safe & Secure Transactions")
                 
                 sent_msg = await ch.send(embed=p_embed)
                 published_msg_id = sent_msg.id
@@ -276,7 +275,7 @@ class MarketReviewView(discord.ui.View):
     async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         post_id = self._get_post_id(interaction)
         if not post_id:
-            return await interaction.response.send_message("❌ ID postingan tidak ditemukan.", ephemeral=True)
+            return await interaction.response.send_message("❌ Post ID not found.", ephemeral=False)
 
         with sqlite3.connect(DB_NAME) as conn:
             row = conn.cursor().execute("SELECT status FROM market_posts WHERE id = ?", (post_id,)).fetchone()
