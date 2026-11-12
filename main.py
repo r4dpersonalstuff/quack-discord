@@ -21,6 +21,7 @@ def init_db():
             delay_minutes INTEGER NOT NULL,
             next_run TEXT NOT NULL
         )''')
+        
         # Cek apakah tabel auto_messages masih memakai struktur lama
         cursor.execute("PRAGMA table_info(auto_messages)")
         columns = [col[1] for col in cursor.fetchall()]
@@ -46,17 +47,20 @@ def init_db():
             channel_id INTEGER NOT NULL,
             message TEXT NOT NULL
         )''')
+        
         cursor.execute('''CREATE TABLE IF NOT EXISTS pending_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL,
             target_channel_id INTEGER NOT NULL, title TEXT NOT NULL,
             description TEXT NOT NULL, image_url TEXT, status TEXT DEFAULT 'PENDING'
         )''')
+        
         cursor.execute('''CREATE TABLE IF NOT EXISTS market_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL,
             listing_type TEXT NOT NULL, skills TEXT NOT NULL, title TEXT NOT NULL,
             description TEXT NOT NULL, rates_or_budget TEXT NOT NULL,
             portfolio TEXT, status TEXT DEFAULT 'PENDING', message_id INTEGER
         )''')
+        
         cursor.execute('''CREATE TABLE IF NOT EXISTS config_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -69,9 +73,9 @@ init_db()
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
     msg = f"❌ There is an error: `{error}`"
     if interaction.response.is_done():
-        await interaction.followup.send(msg, ephemeral=False)
+        await interaction.followup.send(msg, ephemeral=True)
     else:
-        await interaction.response.send_message(msg, ephemeral=False)
+        await interaction.response.send_message(msg, ephemeral=True)
 
 # BACKGROUND TASKS & DM ABORT LISTENER
 @tasks.loop(minutes=1)
@@ -120,7 +124,11 @@ async def before_check_messages():
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.guild is None and not message.author.bot:
+    if message.author.bot:
+        return
+
+    # Fitur abort via DM untuk marketplace
+    if message.guild is None:
         if message.content.strip().lower() == "abort":
             embed = discord.Embed(
                 title="❌ Listing Cancelled",
@@ -129,12 +137,32 @@ async def on_message(message: discord.Message):
             )
             await message.channel.send(embed=embed)
             return
-    await bot.process_commands(message)
 
+    # Fitur 8-Ball saat bot di-mention (@RAC <pertanyaan>)
+    if message.guild is not None and (f"<@{bot.user.id}>" in message.content or f"<@!{bot.user.id}>" in message.content):
+        question = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
+        
+        if not question:
+            await message.reply("🎱 Tanya sesuatu setelah mention bot! Contoh: `@RaDS Apakah aku ganteng?`")
+            return
+
+        ans = random.choice([
+            "It is certain.",
+            "Without a doubt.",
+            "Yes, definitely.",
+            "Ask again later.",
+            "Cannot predict now.",
+            "Don't count on it.",
+            "My reply is no.",
+            "Very doubtful."
+        ])
+        await message.reply(f"🎱 {ans}")
+        return
+
+    await bot.process_commands(message)
 
 # AUTOMATED MESSAGES MANAGEMENT (RANDOM POOL)
 @bot.tree.command(name="add_auto_msg", description="Add a message to a channel's auto-message pool")
-@discord.app_commands.default_permissions(manage_messages=True)
 @discord.app_commands.describe(
     channel="Target channel", 
     message="Message content", 
@@ -171,17 +199,16 @@ async def add_auto_msg(
 
     await interaction.response.send_message(
         f"✅ Message successfully added to the auto-message pool {channel.mention}!\n"
-        f"⏱️ **Interval Channel:** Every **{current_delay} minutes** (1 random message will be sent).\n"
-        f"📝 **Message:** {message}",
-        ephemeral=False
+        f"⏱️ **Interval Channel:** Every **{current_delay} menit** (1 random message will be sent).\n"
+        f"📝 **Pesan:** {message}",
+        ephemeral=True
     )
 
 @bot.tree.command(name="set_auto_interval", description="Change recurring interval delay for a channel")
-@discord.app_commands.default_permissions(manage_messages=True)
 @discord.app_commands.describe(channel="Target channel", delay_minutes="Interval delay in minutes")
 async def set_auto_interval(interaction: discord.Interaction, channel: discord.TextChannel, delay_minutes: int):
     if delay_minutes < 1:
-        return await interaction.response.send_message("❌ Minimum interval of 1 minute.", ephemeral=False)
+        return await interaction.response.send_message("❌ Interval minimal 1 menit.", ephemeral=True)
     
     next_run = (datetime.now() + timedelta(minutes=delay_minutes)).isoformat()
     with sqlite3.connect(DB_NAME) as conn:
@@ -194,19 +221,18 @@ async def set_auto_interval(interaction: discord.Interaction, channel: discord.T
         conn.commit()
     
     await interaction.response.send_message(
-        f"⏱️ Auto-message interval for {channel.mention} changed to every **{delay_minutes} minutes**.", 
-        ephemeral=False
+        f"⏱️ Interval auto-message untuk {channel.mention} diubah menjadi setiap **{delay_minutes} menit**.", 
+        ephemeral=True
     )
 
 @bot.tree.command(name="list_auto_msgs", description="View active recurring automated message pools")
-@discord.app_commands.default_permissions(manage_messages=True)
 async def list_auto_msgs(interaction: discord.Interaction):
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         schedules = cursor.execute("SELECT channel_id, delay_minutes FROM channel_schedules").fetchall()
         
         if not schedules:
-            return await interaction.response.send_message("ℹ️ There are no active auto-message schedules.", ephemeral=False)
+            return await interaction.response.send_message("ℹ️ Tidak ada jadwal auto-message yang aktif.", ephemeral=True)
         
         embed = discord.Embed(title="📋 Active Automated Messages (Random Pool)", color=discord.Color.blue())
         for ch_id, delay in schedules:
@@ -214,21 +240,20 @@ async def list_auto_msgs(interaction: discord.Interaction):
             if msgs:
                 msg_list = "\n".join([f"• `[ID #{m_id}]` {msg}" for m_id, msg in msgs])
                 embed.add_field(
-                    name=f"Channel: <#{ch_id}> | Interval: Every {delay} min",
+                    name=f"Channel: <#{ch_id}> | Interval: Setiap {delay} min",
                     value=msg_list if len(msg_list) <= 1024 else msg_list[:1020] + "...",
                     inline=False
                 )
     
-    await interaction.response.send_message(embed=embed, ephemeral=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="delete_auto_msg", description="Delete an automated message from pool by ID")
-@discord.app_commands.default_permissions(manage_messages=True)
 async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         row = cursor.execute("SELECT channel_id FROM auto_messages WHERE id = ?", (msg_id,)).fetchone()
         if not row:
-            return await interaction.response.send_message(f"❌ Auto-message ID `#{msg_id}` not found.", ephemeral=False)
+            return await interaction.response.send_message(f"❌ Auto-message ID `#{msg_id}` tidak ditemukan.", ephemeral=True)
         
         ch_id = row[0]
         cursor.execute("DELETE FROM auto_messages WHERE id = ?", (msg_id,))
@@ -239,36 +264,28 @@ async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
         
         conn.commit()
     
-    await interaction.response.send_message(f"🗑 Successfully deleted auto-message ID `#{msg_id}`.", ephemeral=False)
+    await interaction.response.send_message(f"🗑️ Berhasil menghapus auto-message ID `#{msg_id}`.", ephemeral=True)
 
-# UTILITY & FUN COMMANDS
+# =================================
+# 4. UTILITY & FUN COMMANDS
+# =================================
 @bot.tree.command(name="say", description="Send a custom message to a specific channel")
-@discord.app_commands.default_permissions(manage_messages=True)
 async def say_custom(interaction: discord.Interaction, message: str, channel: discord.TextChannel):
     await channel.send(message)
-    await interaction.response.send_message(f"✅ Message sent to {channel.mention}!", ephemeral=False)
+    await interaction.response.send_message(f"✅ Message sent to {channel.mention}!", ephemeral=True)
 
 @bot.tree.command(name="devlog", description="Send a formatted update / devlog announcement")
-@discord.app_commands.default_permissions(manage_messages=True)
 async def devlog_command(interaction: discord.Interaction, version: str, title: str, changes: str, channel: discord.TextChannel):
-    embed = discord.Embed(title=f"Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+    embed = discord.Embed(title=f"🚀 Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"Posted by {interaction.user.display_name}")
     await channel.send(embed=embed)
-    await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=False)
+    await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
 
 @bot.tree.command(name="roll", description="Roll a random number or dice")
 async def roll_command(interaction: discord.Interaction, max_value: int = 100):
     if max_value < 1:
         return await interaction.response.send_message("❌ Max value must be >= 1.", ephemeral=True)
     await interaction.response.send_message(f"🎲 **{interaction.user.display_name}** rolled **{random.randint(1, max_value)}** (1-{max_value})!")
-
-@bot.tree.command(name="8ball", description="Ask the Magic 8-Ball a question")
-async def eight_ball_command(interaction: discord.Interaction, question: str):
-    ans = random.choice(["It is certain.", "Without a doubt.", "Yes, definitely.", "Ask again later.", "Cannot predict now.", "Don't count on it.", "My reply is no.", "Very doubtful."])
-    embed = discord.Embed(title="🎱 Magic 8-Ball", color=discord.Color.purple())
-    embed.add_field(name="Question", value=question, inline=False)
-    embed.add_field(name="Answer", value=ans, inline=False)
-    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="coinflip", description="Flip a virtual coin")
 async def coinflip_command(interaction: discord.Interaction):
@@ -278,7 +295,9 @@ async def coinflip_command(interaction: discord.Interaction):
 async def rate_command(interaction: discord.Interaction, thing: str):
     await interaction.response.send_message(f"⭐ I rate **{thing}** a **{random.randint(0, 100)}%**!")
 
-# ROLE PICKER (FORM + DROPDOWN SETUP)
+# ==========================================
+# 5. ROLE PICKER (FORM + DROPDOWN SETUP)
+# ==========================================
 class RoleSelectMenu(discord.ui.Select):
     def __init__(self, roles: list[discord.Role] = None):
         if roles:
@@ -315,9 +334,9 @@ class RoleSelectMenu(discord.ui.Select):
                 await interaction.user.remove_roles(*to_rem)
             await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Failed to updated role! Make sure the bot's role placed ABOVE' role target and have the 'Manage Roles' permission.",ephemeral=False)
+            await interaction.response.send_message("❌ Failed to updated role! Make sure the bot's role placed ABOVE' role target dan punya izin 'Manage Roles'.", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ An error occurred: {e}", ephemeral=False)
+            await interaction.response.send_message(f"❌ Terjadi error: {e}", ephemeral=True)
 
 class RolePickerDropdownView(discord.ui.View):
     def __init__(self, roles: list[discord.Role] = None):
@@ -326,7 +345,7 @@ class RolePickerDropdownView(discord.ui.View):
 
 class RolePickerSetupRoleSelect(discord.ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="Select the roles you want to add (max 25)...", min_values=1, max_values=25)
+        super().__init__(placeholder="1. Pilih role yang mau dimasukkan (maks 25)...", min_values=1, max_values=25)
 
     async def callback(self, interaction: discord.Interaction):
         self.view.selected_roles = list(self.values)
@@ -335,7 +354,7 @@ class RolePickerSetupRoleSelect(discord.ui.RoleSelect):
 class RolePickerSetupChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
         super().__init__(
-            placeholder="Select the destination channel for delivery...",
+            placeholder="2. Pilih channel tujuan pengiriman...",
             channel_types=[discord.ChannelType.text],
             min_values=1,
             max_values=1
@@ -357,19 +376,19 @@ class RolePickerSetupView(discord.ui.View):
         self.add_item(RolePickerSetupRoleSelect())
         self.add_item(RolePickerSetupChannelSelect())
 
-    @discord.ui.button(label="Send Role Picker", style=discord.ButtonStyle.success, emoji="✅", row=2)
+    @discord.ui.button(label="Kirim Role Picker", style=discord.ButtonStyle.success, emoji="✅", row=2)
     async def publish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_roles:
-            return await interaction.response.send_message("❌ Select at least 1 role first in the first dropdown!", ephemeral=False)
+            return await interaction.response.send_message("❌ Pilih minimal 1 role terlebih dahulu di dropdown pertama!", ephemeral=True)
         if not self.target_channel_id:
-            return await interaction.response.send_message("❌ Select the destination channel first in the second dropdown.!", ephemeral=False)
+            return await interaction.response.send_message("❌ Pilih channel tujuan terlebih dahulu di dropdown kedua!", ephemeral=True)
 
         target_ch = interaction.guild.get_channel(self.target_channel_id)
         if not target_ch:
             try:
                 target_ch = await interaction.guild.fetch_channel(self.target_channel_id)
             except Exception as e:
-                return await interaction.response.send_message(f"❌ Failed to access the target channel: `{e}`", ephemeral=False)
+                return await interaction.response.send_message(f"❌ Gagal mengakses channel tujuan: `{e}`", ephemeral=True)
 
         embed = discord.Embed(title=self.embed_title, description=self.embed_description, color=discord.Color.blue())
         if self.image_url:
@@ -378,39 +397,39 @@ class RolePickerSetupView(discord.ui.View):
         try:
             await target_ch.send(embed=embed, view=RolePickerDropdownView(self.selected_roles))
         except discord.Forbidden:
-            return await interaction.response.send_message(f"❌ Bot does not have permission to send messages on {target_ch.mention}!", ephemeral=False)
+            return await interaction.response.send_message(f"❌ Bot tidak punya izin mengirim pesan di {target_ch.mention}!", ephemeral=True)
         except Exception as e:
             return await interaction.response.send_message(f"❌ Error while sending `{e}`", ephemeral=False)
 
         done_embed = discord.Embed(
             title="✅ Role Picker Created Succeesfully!",
-            description=f"The role picker panel has been sent to {target_ch.mention} with **{len(self.selected_roles)}** role selection.",
+            description=f"Panel role picker sudah dikirim ke {target_ch.mention} dengan **{len(self.selected_roles)}** pilihan role.",
             color=discord.Color.green()
         )
         await interaction.response.edit_message(embed=done_embed, view=None)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️", row=2)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cancel_embed = discord.Embed(title="❌ Role Picker Creation Cancelled", color=discord.Color.red())
+        cancel_embed = discord.Embed(title="❌ Pembuatan Role Picker Dibatalkan", color=discord.Color.red())
         await interaction.response.edit_message(embed=cancel_embed, view=None)
 
 class RolePickerModal(discord.ui.Modal, title="Setup Role Picker"):
     title_input = discord.ui.TextInput(
         label="Title",
-        placeholder="Example: Choose Your Role!",
+        placeholder="Example: Pilih Role Kamu!",
         required=True,
         max_length=100
     )
     desc_input = discord.ui.TextInput(
-        label="Description",
+        label="Description / Deskripsi",
         style=discord.TextStyle.paragraph,
-        placeholder="Explain the function of each role here...",
+        placeholder="Jelaskan fungsi masing-masing role di sini...",
         required=True,
         max_length=2000
     )
     image_input = discord.ui.TextInput(
-        label="Image URL (Optional)",
-        placeholder="https://... (leave blank if not using an image)",
+        label="Image URL (Opsional)",
+        placeholder="https://... (kosongkan jika tidak pakai gambar)",
         required=False,
         max_length=300
     )
@@ -418,27 +437,24 @@ class RolePickerModal(discord.ui.Modal, title="Setup Role Picker"):
     async def on_submit(self, interaction: discord.Interaction):
         img_url = self.image_input.value.strip() or None
         preview_embed = discord.Embed(
-            title="🛠 Step 2: Select Role & Destination Channel",
+            title="🛠️ Langkah 2: Pilih Role & Channel Tujuan",
             description=(
-                f"**Title:** {self.title_input.value}\n"
-                f"**Description:** {self.desc_input.value[:200]}{'...' if len(self.desc_input.value) > 200 else ''}\n\n"
-                "Please select **list of roles** (maximum 25) and the **destination channel** via the dropdown menu below, then click **Send Role Picker**."
+                f"**Judul:** {self.title_input.value}\n"
+                f"**Deskripsi:** {self.desc_input.value[:200]}{'...' if len(self.desc_input.value) > 200 else ''}\n\n"
+                "Silakan pilih **daftar role** (maksimal 25) dan **channel tujuan** lewat menu dropdown di bawah, lalu klik **Kirim Role Picker**."
             ),
             color=discord.Color.blue()
         )
         view = RolePickerSetupView(self.title_input.value, self.desc_input.value, img_url)
-        await interaction.response.send_message(embed=preview_embed, view=view, ephemeral=False)
+        await interaction.response.send_message(embed=preview_embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="rolepicker", description="Create a role picker embed with interactive form & dropdown")
-@discord.app_commands.default_permissions(manage_roles=True)
 @discord.app_commands.checks.has_permissions(manage_roles=True)
 async def rolepicker_command(interaction: discord.Interaction):
     await interaction.response.send_modal(RolePickerModal())
 
 # MARKETPLACE SETUP & MODERATION COMMANDS
 @bot.tree.command(name="setup_market", description="Setup the Marketplace panel embed in the current channel")
-@discord.app_commands.default_permissions(administrator=True)
-@discord.app_commands.checks.has_permissions(administrator=True)
 async def setup_market_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 RaDS MARKETPLACE",
@@ -457,7 +473,6 @@ async def setup_market_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="marketplaceban", description="Ban a user from accessing Marketplace channels")
 @discord.app_commands.describe(user="Target user to ban", reason="Reason for marketplace ban")
-@discord.app_commands.default_permissions(manage_roles=True)
 @discord.app_commands.checks.has_permissions(manage_roles=True)
 async def marketplaceban_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Violation of marketplace rules"):
     lfd_id = get_setting("LFD_CHANNEL_ID")
@@ -490,14 +505,12 @@ async def marketplaceban_command(interaction: discord.Interaction, user: discord
 
 @bot.tree.command(name="postremove", description="Remove a marketplace post by ID with a reason prompt")
 @discord.app_commands.describe(post_id="ID of the post to remove")
-@discord.app_commands.default_permissions(manage_messages=True)
 @discord.app_commands.checks.has_permissions(manage_messages=True)
 async def postremove_command(interaction: discord.Interaction, post_id: int):
     await interaction.response.send_modal(RemovePostModal(post_id))
 
 # CONFIG & SETTINGS COMMANDS
 @bot.tree.command(name="settings", description="Show Marketplace configuration status")
-@discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.checks.has_permissions(administrator=True)
 async def settings_command(interaction: discord.Interaction):
     review_id = get_setting("POST_REVIEW_CHANNEL_ID")
@@ -537,7 +550,6 @@ async def settings_command(interaction: discord.Interaction):
         discord.app_commands.Choice(name="FHD Channel (Buy / Hire)", value="FHD_CHANNEL_ID")
     ]
 )
-@discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.checks.has_permissions(administrator=True)
 async def set_channel_command(interaction: discord.Interaction, target: str, channel: discord.TextChannel):
     set_setting(target, channel.id)
@@ -550,7 +562,7 @@ async def set_channel_command(interaction: discord.Interaction, target: str, cha
     
     name = target_names.get(target, target)
     await interaction.response.send_message(
-        f"✅ **{name}** successfully set to {channel.mention} (`{channel.id}`).",
+        f"✅ **{name}** berhasil diatur ke {channel.mention} (`{channel.id}`).",
         ephemeral=True
     )
 
@@ -563,7 +575,6 @@ async def on_ready():
     
     bot.add_view(OpenMarketRequestView())
     bot.add_view(MarketReviewView())
-    bot.add_view(RolePickerDropdownView())
     
     try:
         synced = await bot.tree.sync()
