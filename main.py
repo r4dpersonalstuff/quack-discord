@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import sqlite3
 from datetime import datetime, timedelta
@@ -138,26 +139,42 @@ async def on_message(message: discord.Message):
             await message.channel.send(embed=embed)
             return
 
-    # Fitur 8-Ball saat bot di-mention (@RAC <pertanyaan>)
-    if message.guild is not None and (f"<@{bot.user.id}>" in message.content or f"<@!{bot.user.id}>" in message.content):
-        question = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
-        
-        if not question:
-            await message.reply("🎱 Tanya sesuatu setelah mention bot! Contoh: `@RaDS Apakah aku ganteng?`")
+    if message.guild is not None:
+        is_mentioned = f"<@{bot.user.id}>" in message.content or f"<@!{bot.user.id}>" in message.content
+        clean_text = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
+
+        has_name = bool(re.search(r"\brads\b", clean_text, re.IGNORECASE))
+        has_hello = bool(re.search(r"\b(hello|halo|hi|hai)\b", clean_text, re.IGNORECASE))
+
+        # 1. Pemicu sapaan ("RaDS" atau @mention + "Hello")
+        if (is_mentioned or has_name) and has_hello:
+            greetings = [
+                f"👋 Hello {message.author.mention}! Ada yang bisa aku bantu?",
+                f"👋 Hai {message.author.mention}! Senang bertemu denganmu!",
+                f"👋 Hello! RaDS siap membantu, {message.author.mention}!"
+            ]
+            await message.reply(random.choice(greetings))
             return
 
-        ans = random.choice([
-            "It is certain.",
-            "Without a doubt.",
-            "Yes, definitely.",
-            "Ask again later.",
-            "Cannot predict now.",
-            "Don't count on it.",
-            "My reply is no.",
-            "Very doubtful."
-        ])
-        await message.reply(f"🎱 {ans}")
-        return
+        # 2. Fitur 8-Ball saat bot di-mention (@RaDS <pertanyaan>)
+        if is_mentioned:
+            if not clean_text:
+                await message.reply("Ask me anything!")
+                return
+
+            ans = random.choice([
+                "It is certain.",
+                "Without a doubt.",
+                "Yes, definitely.",
+                "Ask again later.",
+                "Cannot predict now.",
+                "Don't count on it.",
+                "My reply is no.",
+                "My reply is yes.",
+                "Very doubtful."
+            ])
+            await message.reply(f"🎱 {ans}")
+            return
 
     await bot.process_commands(message)
 
