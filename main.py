@@ -21,7 +21,6 @@ def init_db():
             delay_minutes INTEGER NOT NULL,
             next_run TEXT NOT NULL
         )''')
-        
         # Cek apakah tabel auto_messages masih memakai struktur lama
         cursor.execute("PRAGMA table_info(auto_messages)")
         columns = [col[1] for col in cursor.fetchall()]
@@ -47,20 +46,17 @@ def init_db():
             channel_id INTEGER NOT NULL,
             message TEXT NOT NULL
         )''')
-        
         cursor.execute('''CREATE TABLE IF NOT EXISTS pending_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL,
             target_channel_id INTEGER NOT NULL, title TEXT NOT NULL,
             description TEXT NOT NULL, image_url TEXT, status TEXT DEFAULT 'PENDING'
         )''')
-        
         cursor.execute('''CREATE TABLE IF NOT EXISTS market_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL,
             listing_type TEXT NOT NULL, skills TEXT NOT NULL, title TEXT NOT NULL,
             description TEXT NOT NULL, rates_or_budget TEXT NOT NULL,
             portfolio TEXT, status TEXT DEFAULT 'PENDING', message_id INTEGER
         )''')
-        
         cursor.execute('''CREATE TABLE IF NOT EXISTS config_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -73,9 +69,9 @@ init_db()
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
     msg = f"❌ There is an error: `{error}`"
     if interaction.response.is_done():
-        await interaction.followup.send(msg, ephemeral=True)
+        await interaction.followup.send(msg, ephemeral=False)
     else:
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message(msg, ephemeral=False)
 
 # BACKGROUND TASKS & DM ABORT LISTENER
 @tasks.loop(minutes=1)
@@ -174,16 +170,16 @@ async def add_auto_msg(
 
     await interaction.response.send_message(
         f"✅ Message successfully added to the auto-message pool {channel.mention}!\n"
-        f"⏱️ **Interval Channel:** Every **{current_delay} menit** (1 random message will be sent).\n"
-        f"📝 **Pesan:** {message}",
-        ephemeral=True
+        f"⏱️ **Interval Channel:** Every **{current_delay} minutes** (1 random message will be sent).\n"
+        f"📝 **Message:** {message}",
+        ephemeral=False
     )
 
 @bot.tree.command(name="set_auto_interval", description="Change recurring interval delay for a channel")
 @discord.app_commands.describe(channel="Target channel", delay_minutes="Interval delay in minutes")
 async def set_auto_interval(interaction: discord.Interaction, channel: discord.TextChannel, delay_minutes: int):
     if delay_minutes < 1:
-        return await interaction.response.send_message("❌ Interval minimal 1 menit.", ephemeral=True)
+        return await interaction.response.send_message("❌ Minimum interval of 1 minute.", ephemeral=False)
     
     next_run = (datetime.now() + timedelta(minutes=delay_minutes)).isoformat()
     with sqlite3.connect(DB_NAME) as conn:
@@ -196,8 +192,8 @@ async def set_auto_interval(interaction: discord.Interaction, channel: discord.T
         conn.commit()
     
     await interaction.response.send_message(
-        f"⏱️ Interval auto-message untuk {channel.mention} diubah menjadi setiap **{delay_minutes} menit**.", 
-        ephemeral=True
+        f"⏱️ Auto-message interval for {channel.mention} changed to every **{delay_minutes} minutes**.", 
+        ephemeral=False
     )
 
 @bot.tree.command(name="list_auto_msgs", description="View active recurring automated message pools")
@@ -207,7 +203,7 @@ async def list_auto_msgs(interaction: discord.Interaction):
         schedules = cursor.execute("SELECT channel_id, delay_minutes FROM channel_schedules").fetchall()
         
         if not schedules:
-            return await interaction.response.send_message("ℹ️ Tidak ada jadwal auto-message yang aktif.", ephemeral=True)
+            return await interaction.response.send_message("ℹ️ There are no active auto-message schedules.", ephemeral=False)
         
         embed = discord.Embed(title="📋 Active Automated Messages (Random Pool)", color=discord.Color.blue())
         for ch_id, delay in schedules:
@@ -215,12 +211,12 @@ async def list_auto_msgs(interaction: discord.Interaction):
             if msgs:
                 msg_list = "\n".join([f"• `[ID #{m_id}]` {msg}" for m_id, msg in msgs])
                 embed.add_field(
-                    name=f"Channel: <#{ch_id}> | Interval: Setiap {delay} min",
+                    name=f"Channel: <#{ch_id}> | Interval: Every {delay} min",
                     value=msg_list if len(msg_list) <= 1024 else msg_list[:1020] + "...",
                     inline=False
                 )
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 @bot.tree.command(name="delete_auto_msg", description="Delete an automated message from pool by ID")
 async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
@@ -228,7 +224,7 @@ async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
         cursor = conn.cursor()
         row = cursor.execute("SELECT channel_id FROM auto_messages WHERE id = ?", (msg_id,)).fetchone()
         if not row:
-            return await interaction.response.send_message(f"❌ Auto-message ID `#{msg_id}` tidak ditemukan.", ephemeral=True)
+            return await interaction.response.send_message(f"❌ Auto-message ID `#{msg_id}` not found.", ephemeral=False)
         
         ch_id = row[0]
         cursor.execute("DELETE FROM auto_messages WHERE id = ?", (msg_id,))
@@ -239,22 +235,20 @@ async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
         
         conn.commit()
     
-    await interaction.response.send_message(f"🗑️ Berhasil menghapus auto-message ID `#{msg_id}`.", ephemeral=True)
+    await interaction.response.send_message(f"🗑 Successfully deleted auto-message ID `#{msg_id}`.", ephemeral=False)
 
-# =================================
-# 4. UTILITY & FUN COMMANDS
-# =================================
+# UTILITY & FUN COMMANDS
 @bot.tree.command(name="say", description="Send a custom message to a specific channel")
 async def say_custom(interaction: discord.Interaction, message: str, channel: discord.TextChannel):
     await channel.send(message)
-    await interaction.response.send_message(f"✅ Message sent to {channel.mention}!", ephemeral=True)
+    await interaction.response.send_message(f"✅ Message sent to {channel.mention}!", ephemeral=False)
 
 @bot.tree.command(name="devlog", description="Send a formatted update / devlog announcement")
 async def devlog_command(interaction: discord.Interaction, version: str, title: str, changes: str, channel: discord.TextChannel):
-    embed = discord.Embed(title=f"🚀 Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+    embed = discord.Embed(title=f"Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"Posted by {interaction.user.display_name}")
     await channel.send(embed=embed)
-    await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
+    await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=False)
 
 @bot.tree.command(name="roll", description="Roll a random number or dice")
 async def roll_command(interaction: discord.Interaction, max_value: int = 100):
@@ -315,7 +309,7 @@ class RoleSelectMenu(discord.ui.Select):
                 await interaction.user.add_roles(*to_add)
             if to_rem:
                 await interaction.user.remove_roles(*to_rem)
-            await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=False)
+            await interaction.response.send_message("✅ Roles updated successfully!", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("❌ Failed to updated role! Make sure the bot's role placed ABOVE' role target and have the 'Manage Roles' permission.",ephemeral=False)
         except Exception as e:
