@@ -160,7 +160,7 @@ async def on_message(message: discord.Message):
         clean_text = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
 
         has_name = bool(re.search(r"\brads\b", clean_text, re.IGNORECASE))
-        has_hello = bool(re.search(r"\b(hello|halo|hi|hai|yo)\b", clean_text, re.IGNORECASE))
+        has_hello = bool(re.search(r"\b(hello|halo|hi|hai|yo|hola)\b", clean_text, re.IGNORECASE))
 
         # 1. Greeting trigger ("RaDS" or @mention + "Hello")
         if (is_mentioned or has_name) and has_hello:
@@ -234,7 +234,7 @@ async def add_auto_msg(
         f"✅ Message successfully added to the auto-message pool {channel.mention}!\n"
         f"⏱️ **Interval Channel:** Every **{current_delay} minutes** (1 random message will be sent).\n"
         f"📝 **Message:** {message}",
-        ephemeral=True
+        ephemeral=False
     )
 
 @bot.tree.command(name="set_auto_interval", description="Change recurring interval delay for a channel")
@@ -255,7 +255,7 @@ async def set_auto_interval(interaction: discord.Interaction, channel: discord.T
     
     await interaction.response.send_message(
         f"⏱️ Auto-message interval for {channel.mention} has been changed to every **{delay_minutes} minutes**.", 
-        ephemeral=True
+        ephemeral=False
     )
 
 @bot.tree.command(name="list_auto_msgs", description="View active recurring automated message pools")
@@ -309,7 +309,7 @@ async def say_custom(interaction: discord.Interaction, message: str, channel: di
 
 @bot.tree.command(name="devlog", description="Send a formatted update / devlog announcement")
 async def devlog_command(interaction: discord.Interaction, version: str, title: str, changes: str, channel: discord.TextChannel):
-    embed = discord.Embed(title=f"🚀 Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+    embed = discord.Embed(title=f"Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"Posted by {interaction.user.display_name}")
     await channel.send(embed=embed)
     await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
@@ -328,9 +328,7 @@ async def coinflip_command(interaction: discord.Interaction):
 async def rate_command(interaction: discord.Interaction, thing: str):
     await interaction.response.send_message(f"⭐ I rate **{thing}** a **{random.randint(0, 100)}%**!")
 
-# ==========================================
-# 5. ROLE PICKER (FORM + DROPDOWN SETUP)
-# ==========================================
+#  ROLE PICKER (FORM + DROPDOWN SETUP)
 class RoleSelectMenu(discord.ui.Select):
     def __init__(self, roles: list[discord.Role] = None):
         if roles:
@@ -488,6 +486,7 @@ async def rolepicker_command(interaction: discord.Interaction):
 
 # MARKETPLACE SETUP & MODERATION COMMANDS
 @bot.tree.command(name="setup_market", description="Setup the Marketplace panel embed in the current channel")
+@discord.app_commands.checks.has_permissions(manage_messages=True)
 async def setup_market_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 RaDS MARKETPLACE",
@@ -608,9 +607,9 @@ async def settings_command(interaction: discord.Interaction):
     embed.description = (
         "**Post Review Channel**\n"
         f"Channels: {get_status(review_id)}\n\n"
-        "**LFD Channel (Sell Services)**\n"
+        "**LFD Channel (Buy / Hire)**\n"
         f"Channels: {get_status(lfd_id)}\n\n"
-        "**FHD Channel (Buy / Hire)**\n"
+        "**FHD Channel (Sell Services)**\n"
         f"Channels: {get_status(fhd_id)}\n\n"
         "**Posting Limits** (change with `/market_limits`)\n"
         f"{format_market_limits()}"
@@ -628,8 +627,8 @@ async def settings_command(interaction: discord.Interaction):
 @discord.app_commands.choices(
     target=[
         discord.app_commands.Choice(name="Post Review Channel", value="POST_REVIEW_CHANNEL_ID"),
-        discord.app_commands.Choice(name="LFD Channel (Sell Services)", value="LFD_CHANNEL_ID"),
-        discord.app_commands.Choice(name="FHD Channel (Buy / Hire)", value="FHD_CHANNEL_ID")
+        discord.app_commands.Choice(name="LFD Channel (Buy / Hire)", value="LFD_CHANNEL_ID"),
+        discord.app_commands.Choice(name="FHD Channel (Sell Services)", value="FHD_CHANNEL_ID")
     ]
 )
 @discord.app_commands.checks.has_permissions(administrator=True)
@@ -638,8 +637,8 @@ async def set_channel_command(interaction: discord.Interaction, target: str, cha
 
     target_names = {
         "POST_REVIEW_CHANNEL_ID": "Post Review Channel",
-        "LFD_CHANNEL_ID": "LFD Channel (Sell Services)",
-        "FHD_CHANNEL_ID": "FHD Channel (Buy / Hire)"
+        "LFD_CHANNEL_ID": "LFD Channel (Buy / Hire)",
+        "FHD_CHANNEL_ID": "FHD Channel (Sell Services)"
     }
     
     name = target_names.get(target, target)
