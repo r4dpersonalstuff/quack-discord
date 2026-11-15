@@ -11,7 +11,7 @@ from market import (
     migrate_market_db, run_market_expiry, send_my_posts, send_market_search, format_market_limits,
     MARKET_SKILLS, LISTING_TYPES, ContactPosterView
 )
-
+from community import migrate_community_db, setup_community, start_community_tasks, award_xp, PollView
 # BOT INITIALIZATION & DATABASE SETUP
 intents = discord.Intents.default()
 intents.message_content = True
@@ -74,6 +74,7 @@ def init_db():
         conn.commit()
 
 init_db()
+setup_community(bot)
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
@@ -143,7 +144,7 @@ async def before_check_market_expiry():
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
-
+    await award_xp(message)
     # Abort feature via DM for the marketplace
     if message.guild is None:
         if message.content.strip().lower() == "abort":
@@ -679,6 +680,7 @@ async def on_ready():
     bot.add_view(OpenMarketRequestView())
     bot.add_view(MarketReviewView())
     bot.add_view(ContactPosterView())
+    bot.add_view(PollView)
     
     try:
         synced = await bot.tree.sync()
@@ -691,7 +693,7 @@ async def on_ready():
 
     if not check_market_expiry.is_running():
         check_market_expiry.start()
-
+    start_community_task()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
