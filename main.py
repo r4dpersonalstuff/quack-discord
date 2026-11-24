@@ -4,8 +4,13 @@ import random
 import sqlite3
 from datetime import datetime, timedelta
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
+from chat import (
+    handle_chat, build_server_embed, build_help_embed,
+    ServerInfoModal, get_text_setting, SERVER_INFO_KEY
+)
 from market import (
     OpenMarketRequestView, MarketReviewView, DB_NAME, RemovePostModal, get_setting, set_setting,
     migrate_market_db, run_market_expiry, send_my_posts, send_market_search, format_market_limits,
@@ -75,9 +80,26 @@ def init_db():
 
 init_db()
 
+def staff_only(**perms):
+    """
+    Staff-only slash command:
+    - default_permissions: Discord hides the command from members who lack these permissions
+    - has_permissions:     enforced at runtime too, as a second layer of protection
+    - guild_only:          not available in DMs
+    """
+    def decorator(func):
+        func = app_commands.default_permissions(**perms)(func)
+        func = app_commands.checks.has_permissions(**perms)(func)
+        func = app_commands.guild_only()(func)
+        return func
+    return decorator
+
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-    msg = f"❌ There is an error: `{error}`"
+    if isinstance(error, (app_commands.MissingPermissions, app_commands.CheckFailure)):
+        msg = "⛔ You don't have permission to use this command."
+    else:
+        msg = f"❌ There is an error: `{error}`"
     if interaction.response.is_done():
         await interaction.followup.send(msg, ephemeral=True)
     else:
@@ -155,47 +177,15 @@ async def on_message(message: discord.Message):
             await message.channel.send(embed=embed)
             return
 
-    if message.guild is not None:
-        is_mentioned = f"<@{bot.user.id}>" in message.content or f"<@!{bot.user.id}>" in message.content
-        clean_text = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
-
-        has_name = bool(re.search(r"\brads\b", clean_text, re.IGNORECASE))
-        has_hello = bool(re.search(r"\b(hello|halo|hi|hai|yo)\b", clean_text, re.IGNORECASE))
-
-        # 1. Greeting trigger ("RaDS" or @mention + "Hello")
-        if (is_mentioned or has_name) and has_hello:
-            greetings = [
-                f"Hello {message.author.mention}! Is there anything I can help?",
-                f"Hi {message.author.mention}! Nice to meet you!",
-                f"Yo! RaDS here!"
-            ]
-            await message.reply(random.choice(greetings))
-            return
-
-        # 2. 8-Ball feature when the bot is mentioned (@RaDS <question>)
-        if is_mentioned:
-            if not clean_text:
-                await message.reply("Ask me anything!")
-                return
-
-            ans = random.choice([
-                "It is certain.",
-                "Without a doubt.",
-                "Yes, definitely.",
-                "Ask again later.",
-                "Cannot predict now.",
-                "Don't count on it.",
-                "My reply is no.",
-                "My reply is yes.",
-                "Very doubtful."
-            ])
-            await message.reply(f"🎱 {ans}")
-            return
+    # Conversation: @mention, "RaDS, ...", or a reply to the bot (see chat.py)
+    if await handle_chat(bot, message):
+        return
 
     await bot.process_commands(message)
 
 # AUTOMATED MESSAGES MANAGEMENT (RANDOM POOL)
 @bot.tree.command(name="add_auto_msg", description="Add a message to a channel's auto-message pool")
+@staff_only(manage_messages=True)
 @discord.app_commands.describe(
     channel="Target channel", 
     message="Message content", 
@@ -214,7 +204,7 @@ async def add_auto_msg(
         if not sched and (delay_minutes is None or delay_minutes < 1):
             return await interaction.response.send_message(
                 "❌ This channel does not yet have an interval schedule. Please provide the 'delay_minutes' parameter (minimum 1 minute).", 
-                ephemeral=False
+                ephemeral=True
             )
         
         if delay_minutes and delay_minutes >= 1:
@@ -238,6 +228,7 @@ async def add_auto_msg(
     )
 
 @bot.tree.command(name="set_auto_interval", description="Change recurring interval delay for a channel")
+@staff_only(manage_messages=True)
 @discord.app_commands.describe(channel="Target channel", delay_minutes="Interval delay in minutes")
 async def set_auto_interval(interaction: discord.Interaction, channel: discord.TextChannel, delay_minutes: int):
     if delay_minutes < 1:
@@ -259,6 +250,7 @@ async def set_auto_interval(interaction: discord.Interaction, channel: discord.T
     )
 
 @bot.tree.command(name="list_auto_msgs", description="View active recurring automated message pools")
+@staff_only(manage_messages=True)
 async def list_auto_msgs(interaction: discord.Interaction):
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
@@ -281,6 +273,7 @@ async def list_auto_msgs(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="delete_auto_msg", description="Delete an automated message from pool by ID")
+@staff_only(manage_messages=True)
 async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
@@ -300,20 +293,25 @@ async def delete_auto_msg(interaction: discord.Interaction, msg_id: int):
     await interaction.response.send_message(f"🗑️ Successfully deleted auto-message ID `#{msg_id}`.", ephemeral=True)
 
 # =================================
-# 4. UTILITY & FUN COMMANDS
+# 4a. STAFF-ONLY ANNOUNCEMENT COMMANDS (hidden from regular members)
 # =================================
 @bot.tree.command(name="say", description="Send a custom message to a specific channel")
+@staff_only(manage_messages=True)
 async def say_custom(interaction: discord.Interaction, message: str, channel: discord.TextChannel):
     await channel.send(message)
     await interaction.response.send_message(f"✅ Message sent to {channel.mention}!", ephemeral=True)
 
 @bot.tree.command(name="devlog", description="Send a formatted update / devlog announcement")
+@staff_only(manage_messages=True)
 async def devlog_command(interaction: discord.Interaction, version: str, title: str, changes: str, channel: discord.TextChannel):
     embed = discord.Embed(title=f"🚀 Devlog [{version}]: {title}", description=changes, color=discord.Color.blue(), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"Posted by {interaction.user.display_name}")
     await channel.send(embed=embed)
     await interaction.response.send_message(f"✅ Devlog posted to {channel.mention}!", ephemeral=True)
 
+# =================================
+# 4b. FUN & UTILITY COMMANDS (visible to everyone)
+# =================================
 @bot.tree.command(name="roll", description="Roll a random number or dice")
 async def roll_command(interaction: discord.Interaction, max_value: int = 100):
     if max_value < 1:
@@ -327,6 +325,20 @@ async def coinflip_command(interaction: discord.Interaction):
 @bot.tree.command(name="rate", description="Rate anything on a scale of 0% to 100%")
 async def rate_command(interaction: discord.Interaction, thing: str):
     await interaction.response.send_message(f"⭐ I rate **{thing}** a **{random.randint(0, 100)}%**!")
+
+@bot.tree.command(name="help", description="See what the bot can do")
+async def help_command(interaction: discord.Interaction):
+    await interaction.response.send_message(embed=build_help_embed(), ephemeral=True)
+
+@bot.tree.command(name="serverinfo", description="Learn about this server")
+@app_commands.guild_only()
+async def serverinfo_command(interaction: discord.Interaction):
+    await interaction.response.send_message(embed=build_server_embed(interaction.guild))
+
+@bot.tree.command(name="set_server_info", description="Set the server description the bot shows to members")
+@staff_only(administrator=True)
+async def set_server_info_command(interaction: discord.Interaction):
+    await interaction.response.send_modal(ServerInfoModal(get_text_setting(SERVER_INFO_KEY)))
 
 # ==========================================
 # 5. ROLE PICKER (FORM + DROPDOWN SETUP)
@@ -482,12 +494,13 @@ class RolePickerModal(discord.ui.Modal, title="Setup Role Picker"):
         await interaction.response.send_message(embed=preview_embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="rolepicker", description="Create a role picker embed with interactive form & dropdown")
-@discord.app_commands.checks.has_permissions(manage_roles=True)
+@staff_only(manage_roles=True)
 async def rolepicker_command(interaction: discord.Interaction):
     await interaction.response.send_modal(RolePickerModal())
 
 # MARKETPLACE SETUP & MODERATION COMMANDS
 @bot.tree.command(name="setup_market", description="Setup the Marketplace panel embed in the current channel")
+@staff_only(administrator=True)
 async def setup_market_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📋 RaDS MARKETPLACE",
@@ -504,8 +517,8 @@ async def setup_market_command(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Marketplace panel created!", ephemeral=True)
 
 @bot.tree.command(name="marketplaceban", description="Ban a user from accessing Marketplace channels")
+@staff_only(manage_roles=True)
 @discord.app_commands.describe(user="Target user to ban", reason="Reason for marketplace ban")
-@discord.app_commands.checks.has_permissions(manage_roles=True)
 async def marketplaceban_command(interaction: discord.Interaction, user: discord.Member, reason: str = "Violation of marketplace rules"):
     lfd_id = get_setting("LFD_CHANNEL_ID")
     fhd_id = get_setting("FHD_CHANNEL_ID")
@@ -536,14 +549,14 @@ async def marketplaceban_command(interaction: discord.Interaction, user: discord
     await interaction.response.send_message(f"🚫 {user.mention} has been banned from the Marketplace channels.\n**Reason:** {reason}", ephemeral=False)
 
 @bot.tree.command(name="postremove", description="Remove a marketplace post by ID with a reason prompt")
+@staff_only(manage_messages=True)
 @discord.app_commands.describe(post_id="ID of the post to remove")
-@discord.app_commands.checks.has_permissions(manage_messages=True)
 async def postremove_command(interaction: discord.Interaction, post_id: int):
     await interaction.response.send_modal(RemovePostModal(post_id))
 
 @bot.tree.command(name="marketplaceunban", description="Restore a user's access to the Marketplace channels")
+@staff_only(manage_roles=True)
 @discord.app_commands.describe(user="Target user to unban")
-@discord.app_commands.checks.has_permissions(manage_roles=True)
 async def marketplaceunban_command(interaction: discord.Interaction, user: discord.Member):
     lfd_id = get_setting("LFD_CHANNEL_ID")
     fhd_id = get_setting("FHD_CHANNEL_ID")
@@ -591,7 +604,7 @@ async def market_search_command(interaction: discord.Interaction, skill: str = N
 
 # CONFIG & SETTINGS COMMANDS
 @bot.tree.command(name="settings", description="Show Marketplace configuration status")
-@discord.app_commands.checks.has_permissions(administrator=True)
+@staff_only(administrator=True)
 async def settings_command(interaction: discord.Interaction):
     review_id = get_setting("POST_REVIEW_CHANNEL_ID")
     lfd_id = get_setting("LFD_CHANNEL_ID")
@@ -617,10 +630,11 @@ async def settings_command(interaction: discord.Interaction):
     )
 
     embed.set_footer(text="Use the /set_channel command to change the configuration.")
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="set_channel", description="Set a target channel for the Marketplace")
+@staff_only(administrator=True)
 @discord.app_commands.describe(
     target="Select which channel setting to update",
     channel="Select the target text channel"
@@ -632,7 +646,6 @@ async def settings_command(interaction: discord.Interaction):
         discord.app_commands.Choice(name="FHD Channel (Buy / Hire)", value="FHD_CHANNEL_ID")
     ]
 )
-@discord.app_commands.checks.has_permissions(administrator=True)
 async def set_channel_command(interaction: discord.Interaction, target: str, channel: discord.TextChannel):
     set_setting(target, channel.id)
 
@@ -649,12 +662,12 @@ async def set_channel_command(interaction: discord.Interaction, target: str, cha
     )
 
 @bot.tree.command(name="market_limits", description="Configure marketplace posting limits (0 = disabled)")
+@staff_only(administrator=True)
 @discord.app_commands.describe(
     cooldown_hours="Hours a user must wait between listings (0 = disabled)",
     max_active_posts="Max pending + live listings per user (0 = disabled)",
     expiry_days="Days before a live listing expires (0 = never expires)"
 )
-@discord.app_commands.checks.has_permissions(administrator=True)
 async def market_limits_command(interaction: discord.Interaction, cooldown_hours: int = None, max_active_posts: int = None, expiry_days: int = None):
     updates = {
         "POST_COOLDOWN_HOURS": cooldown_hours,
