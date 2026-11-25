@@ -8,7 +8,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from chat import (
-    handle_chat, build_server_embed, build_help_embed,
+    handle_chat, build_server_text, build_help_embed,
     ServerInfoModal, get_text_setting, SERVER_INFO_KEY
 )
 from market import (
@@ -333,7 +333,7 @@ async def help_command(interaction: discord.Interaction):
 @bot.tree.command(name="serverinfo", description="Learn about this server")
 @app_commands.guild_only()
 async def serverinfo_command(interaction: discord.Interaction):
-    await interaction.response.send_message(embed=build_server_embed(interaction.guild))
+    await interaction.response.send_message(build_server_text(interaction.guild))
 
 @bot.tree.command(name="set_server_info", description="Set the server description the bot shows to members")
 @staff_only(administrator=True)
